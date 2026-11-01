@@ -13,6 +13,7 @@ import sys
 
 os.environ["REGION"] = "us-east-1"
 os.environ["DISCORD_BOT_TOKEN_SECRET_NAME"] = "test-secret-name"
+os.environ["STARTGG_API_KEY_SECRET_NAME"] = "test-startgg-secret-name"
 os.environ["DYNAMODB_TABLE_NAME"] = "test-table"
 
 _WORKER_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "jobs", "deferred_worker"))

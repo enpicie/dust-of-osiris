@@ -17,7 +17,7 @@ Discord ──POST──▶ API Gateway ──▶ bot Lambda (src/) ──reply�
 
 The bot Lambda also uses:
 - **SQS → deferred worker Lambda** for commands that take longer than 3s ([Deferred commands](#deferred-commands))
-- **Secrets Manager** for the bot token, for Discord REST calls ([Bot token](#bot-token))
+- **Secrets Manager** for the bot token (Discord REST calls, [Bot token](#bot-token)) and the start.gg API key
 
 ## One-time setup
 
@@ -26,6 +26,8 @@ The bot Lambda also uses:
    - **Public Key** → `DISCORD_PUBLIC_KEY_DEV` / `_PROD` in [config.env](./config.env) (public, safe to commit)
    - **Application ID** → repo **variable** `DISCORD_APP_ID_DEV` / `_PROD`
    - **Bot Token** (Bot tab → Reset Token) → repo **secret** `DISCORD_BOT_TOKEN_DEV` / `_PROD`
+   - **start.gg API key** ([developer settings](https://start.gg/admin/profile/developer)) → repo
+     **secret** `STARTGG_API_KEY` (one key, shared by dev and prod)
 2. **AWS access.** The pipelines use the org-level secrets
    `AWS_ROLE_ARN_LAMBDA_APIGW_DDB_SQS` (Terraform) and `AWS_ROLE_ARN_S3`
    (artifact upload). Repos in the `enpicie` org inherit them.
@@ -39,7 +41,12 @@ The bot Lambda also uses:
    *Run Discord command registration* checked (see
    [Command registration](#command-registration)). Invite the bot
    (OAuth2 → URL Generator → scopes `bot` + `applications.commands`) and try `/ping`.
-6. **Go to prod.** Push a version tag (`git tag 1.0.0 && git push origin 1.0.0`).
+6. **Matchmaking roles.** Put the four role IDs for each environment in
+   [terraform/infra/matchmaking_roles.tf](./terraform/infra/matchmaking_roles.tf)
+   and redeploy. Give the bot **Manage Roles** and rank its role above the four
+   matchmaking roles. Until all four IDs are set, the bot works out tiers but
+   changes no roles. See [Matchmaking roles](#matchmaking-roles).
+7. **Go to prod.** Push a version tag (`git tag 1.0.0 && git push origin 1.0.0`).
    The Release Pipeline deploys prod and registers every command. Point the prod
    app's Interactions Endpoint URL at the prod output the same way as step 4.
 
@@ -108,15 +115,61 @@ Error handling:
   registration rules, so a bad name or a description over 100 characters fails
   in CI, not at registration.
 
-## Starter commands
+## Commands
 
-| Command | Group | Shows |
+All replies are ephemeral (only the caller sees them). Replies mention roles but
+never ping or notify anyone (`allowed_mentions` empty plus `SUPPRESS_NOTIFICATIONS`).
+
+| Command | Group | Does |
 |---|---|---|
-| `/ping` | `general` | The minimum: endpoint, signature check, dispatch |
-| `/slow-echo text` | `deferred_example` | The deferred pattern: ⏳ placeholder, then a followup from the worker |
+| `/ping` | `general` | Health check: endpoint, signature check, dispatch |
+| `/request-matchmaking-role startgg_discriminator` | `matchmaking` | Verify the start.gg account is the caller's, then grant the tier their results earn. If it can't be verified, add Fighter. Deferred |
+| `/remove-matchmaking-role role` | `matchmaking` | Remove exactly the one role the caller picks (Novice, Fighter, Ascended or Elite). An Elite player can drop Ascended and keep Elite. Deferred |
+| `/get-fighter-role` | `matchmaking` | Add the universal Fighter role. Deferred |
+| `/results-view startgg_discriminator` | `matchmaking` | List the results the tier is worked out from, and which rule each meets. Deferred |
+| `/help` | `matchmaking` | How the matchmaking roles work, with each tier's bar (mentions roles silently) |
+| `/help-commands` | `matchmaking` | List the matchmaking commands (mentions @Fighter silently) |
+| `/help-startgg` | `matchmaking` | How to find a start.gg discriminator and connect Discord on start.gg |
+| `/appeal-matchmaking-role` | `matchmaking` | Tell the caller to contact @enpicie with supporting results |
 
-Replace the example groups with your own (and update their lines in
-`command_map.py`) once you've built your own commands.
+## Matchmaking roles
+
+Four roles, weakest to strongest: **Novice**, **Fighter**, **Ascended**,
+**Elite**. No other role is ever touched.
+
+- **Roles only move up.** Each tier is a fixed bar to clear. A request that earns
+  a higher tier adds it and removes lower level roles (in practice, Novice). A
+  request that comes out lower than what the member holds changes nothing.
+  Elite is a subset of Ascended, so Elite players hold both.
+- **Fighter is universal.** Anyone can hold it alongside any tier. It's added by
+  `/get-fighter-role`, by a Fighter-level result, or as the default when a
+  discriminator can't be verified, and a request never removes it.
+- **Removing is always explicit:** `/remove-matchmaking-role` takes the one role
+  to drop, so nothing else changes by accident.
+  Every reply that grants a tier other than Fighter mentions `/get-fighter-role`.
+
+**Linking a player to start.gg.** start.gg can't be searched by Discord ID, so
+the player passes their start.gg discriminator (the 8-character code on their
+profile; a pasted profile link also works). Before fetching any results, the
+worker checks that the account's connected Discord is the caller's. If the
+account doesn't exist, has no visible Discord connection, or belongs to someone
+else, the player gets Fighter (and keeps any tier role they had) plus
+instructions to connect Discord on start.gg and make it visible. If start.gg is
+down, no roles change.
+
+**Working out the tier** ([matchmaking_rules.py](./jobs/deferred_worker/matchmaking_rules.py)):
+- **Elite / Ascended:** placement-based qualifiers in `QUALIFIERS`. Named events
+  are matched by start.gg event ID; series (TNS Netplay, Midweek Melting, Melt
+  Your Blood) by name, excluding redemption brackets.
+- **Fighter:** any MBAACC result of 2-2 or better (2+ set wins, byes excluded)
+  in a bracket of 24+.
+- **Novice:** everything else, including no results.
+- "Top N" means placement ≤ N, which lines up with start.gg's tied placements.
+- Frosty Faustings 2026's event standings are wrong, so its placements come from
+  the Top 8 bracket (`PLACEMENT_OVERRIDE_PHASE_GROUPS`).
+
+To change the rules, edit `QUALIFIERS` and the fighter thresholds; the tests in
+`tests/deferred_worker/test_matchmaking_rules.py` pin each one.
 
 ## Deferred commands
 
@@ -181,6 +234,24 @@ make lint
 
 There is no local Discord stack. Interactions need the deployed endpoint, so test
 end to end on dev.
+
+### Live player tier check
+
+[tests/deferred_worker/test_live_player_tiers.py](./tests/deferred_worker/test_live_player_tiers.py)
+looks up known players on the real start.gg API and checks each lands on their
+expected roles (the Discord-account check is skipped; it needs each player's own
+Discord ID). It runs only when `STARTGG_API_KEY` is set, so `make test` stays
+offline. In CI, the unit-test job's **Live player tiers (start.gg)** step runs it
+with the repo secret, prints a report (player tag, discriminator, roles,
+expected roles, reason) to the log and the job summary, and fails the pipeline
+on a mismatch. Players' results change over time; when one stops matching,
+check the report and update `PLAYERS` in that file.
+
+To run it locally:
+
+```bash
+STARTGG_API_KEY=<key> PYTHONPATH=src .venv/bin/pytest tests/deferred_worker/test_live_player_tiers.py -s
+```
 
 ## Conventions
 

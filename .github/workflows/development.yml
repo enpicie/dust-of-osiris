@@ -60,6 +60,8 @@ jobs:
     uses: ./.github/workflows/workflow-run-unit-tests.yml
     with:
       python_runtime: ${{ needs.read-config.outputs.PYTHON_RUNTIME }}
+    secrets:
+      STARTGG_API_KEY: ${{ secrets.STARTGG_API_KEY }}
 
   deploy:
     needs:
@@ -83,6 +85,7 @@ jobs:
       AWS_ROLE_ARN_LAMBDA_APIGW_DDB_SQS: ${{ secrets.AWS_ROLE_ARN_LAMBDA_APIGW_DDB_SQS }}
       AWS_ROLE_ARN_S3: ${{ secrets.AWS_ROLE_ARN_S3 }}
       DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN_DEV }}
+      STARTGG_API_KEY: ${{ secrets.STARTGG_API_KEY }}
 
   register-commands:
     needs: deploy

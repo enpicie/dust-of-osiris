@@ -59,3 +59,9 @@ variable "discord_bot_token" {
   type        = string
   sensitive   = true
 }
+
+variable "startgg_api_key" {
+  description = "start.gg API key — stored in Secrets Manager, fetched by the deferred worker at runtime"
+  type        = string
+  sensitive   = true
+}

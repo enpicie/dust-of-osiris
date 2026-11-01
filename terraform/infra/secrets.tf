@@ -45,7 +45,28 @@ resource "aws_iam_role_policy" "deferred_worker_secrets_policy" {
         Effect   = "Allow"
         Action   = "secretsmanager:GetSecretValue"
         Resource = aws_secretsmanager_secret.discord_bot_token.arn
+      },
+      {
+        Sid      = "GetStartggApiKey"
+        Effect   = "Allow"
+        Action   = "secretsmanager:GetSecretValue"
+        Resource = aws_secretsmanager_secret.startgg_api_key.arn
       }
     ]
   })
+}
+
+# ── Feature: start.gg API key in Secrets Manager ─────────────────────────────
+# Only the deferred worker calls start.gg (matchmaking lookups), so only its
+# role can read this. Same pattern as the bot token: the Lambda gets the
+# secret's NAME and fetches the value at runtime.
+
+resource "aws_secretsmanager_secret" "startgg_api_key" {
+  name        = "${var.app_name}-startgg-api-key-${var.deployment_env}"
+  description = "start.gg API key for ${var.app_name}"
+}
+
+resource "aws_secretsmanager_secret_version" "startgg_api_key" {
+  secret_id     = aws_secretsmanager_secret.startgg_api_key.id
+  secret_string = var.startgg_api_key
 }

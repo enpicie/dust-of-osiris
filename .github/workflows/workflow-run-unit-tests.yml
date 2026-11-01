@@ -7,6 +7,10 @@ on:
         description: 'Python version to use (e.g., 3.11)'
         required: true
         type: string
+    secrets:
+      STARTGG_API_KEY:
+        description: 'start.gg API key for the live player tier check; without it that step skips'
+        required: false
 
 jobs:
   test:
@@ -26,6 +30,14 @@ jobs:
 
       - name: Lint via Makefile
         run: make lint
+
+      # Real start.gg lookups for known players (tests/deferred_worker/
+      # test_live_player_tiers.py). Prints a player / discriminator / roles
+      # report to this log and the job summary, and fails on a mismatch.
+      - name: Live player tiers (start.gg)
+        env:
+          STARTGG_API_KEY: ${{ secrets.STARTGG_API_KEY }}
+        run: .venv/bin/pytest tests/deferred_worker/test_live_player_tiers.py -s -v
 
   terraform-validate:
     runs-on: ubuntu-latest

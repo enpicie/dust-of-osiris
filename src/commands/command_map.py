@@ -5,9 +5,9 @@ from commands.models.command_mapping import CommandMapping
 # dict and scripts/register_commands.py registers every entry with Discord.
 # One group per line, trailing commas, so adding or deleting a group is one line.
 from commands.general.mapping import general_commands_mapping
-from commands.deferred_example.mapping import deferred_example_commands_mapping
+from commands.matchmaking.mapping import matchmaking_commands_mapping
 
 command_map: CommandMapping = {
     **general_commands_mapping,
-    **deferred_example_commands_mapping,
+    **matchmaking_commands_mapping,
 }

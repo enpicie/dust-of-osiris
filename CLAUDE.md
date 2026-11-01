@@ -12,7 +12,8 @@ which matchmaking role(s) they are eligible for under a configured rule set.
 - **Python 3.12** — Lambda runtime; single language across bot, jobs, and scripts.
 - **AWS Lambda + API Gateway v2** — serverless HTTP entry point for Discord interactions; zero idle cost.
 - **SQS + deferred worker Lambda** — work that can't finish inside Discord's 3-second deadline.
-- **Secrets Manager** — Discord bot token, fetched at runtime by name.
+- **Secrets Manager** — Discord bot token and start.gg API key, fetched at runtime by name.
+- **start.gg GraphQL API** — player results (MBAACC, videogame ID 22407); called only from the deferred worker.
 - **Terraform (S3 remote state via org composite action)** — one root, `terraform/infra`; state keyed per project/env.
 - **GitHub Actions** — dev pipeline on non-main pushes, release pipeline on version tags.
 
@@ -49,6 +50,7 @@ The Code Style rules at the bottom of this file (imports, Discord mentions, logg
 - **Command self-discovery:** to add a command group, create `src/commands/<group>/mapping.py` with the group's `CommandMapping` dict and merge it in `src/commands/command_map.py`. Register with Discord via the register-commands workflow.
 - **Jobs are self-contained:** `jobs/<name>/` packages cannot import from `src/`. When logic must exist in both places, duplicate it and mark both copies with a MIRROR comment; never import across the boundary.
 - **Job module names are unique across jobs and distinct from `src/`'s top-level names.** Each job imports by bare name, and every job directory plus `src/` share one `sys.path` under pytest. `tests/test_job_module_names.py` enforces both; `handler.py` is the one allowed repeat.
+- **Matchmaking rules are data.** Tier qualifiers live in `jobs/deferred_worker/matchmaking_rules.py` (`QUALIFIERS`); change rules there, with a test per rule. The worker only ever adds/removes the four matchmaking role IDs, and touches none until all four are configured. Roles only move up: a lower result never replaces a higher role, and moving up removes only lower level roles (Novice). Fighter is universal and a request never removes it. `/remove-matchmaking-role` removes exactly the one role named.
 - **Anything that can exceed Discord's 3s deadline defers.** The command handler validates, calls `deferred_dispatch.dispatch(...)`, and returns a `⏳` placeholder; `jobs/deferred_worker` does the work and posts a followup.
 
 ## Do Not Modify Without Explicit Instruction

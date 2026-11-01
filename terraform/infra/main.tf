@@ -45,12 +45,14 @@ resource "aws_lambda_function" "bot_lambda" {
   layers = [
     aws_lambda_layer_version.app_layer.arn
   ]
+  # MATCHMAKING_ROLE_IDS (from matchmaking_roles.tf) lets /help-commands mention @Fighter.
   environment {
     variables = {
       REGION                        = var.aws_region
       PUBLIC_KEY                    = var.discord_public_key
       DISCORD_BOT_TOKEN_SECRET_NAME = aws_secretsmanager_secret.discord_bot_token.name
       DEFERRED_WORKER_QUEUE_URL     = aws_sqs_queue.deferred_worker.url
+      MATCHMAKING_ROLE_IDS          = jsonencode(local.matchmaking_role_ids)
     }
   }
 
