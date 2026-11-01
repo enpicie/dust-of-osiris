@@ -74,6 +74,8 @@ class _Base(unittest.TestCase):
         self.assertEqual(reply["allowed_mentions"], {"parse": []})
         self.assertTrue(reply["flags"] & matchmaking_commands.EPHEMERAL)
         self.assertTrue(reply["flags"] & matchmaking_commands.SUPPRESS_NOTIFICATIONS)
+        # start.gg links (Melt Your Blood, profile) never unfurl into previews.
+        self.assertTrue(reply["flags"] & matchmaking_commands.SUPPRESS_EMBEDS)
 
 
 class TestRequestRoleChanges(_Base):

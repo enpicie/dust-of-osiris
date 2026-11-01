@@ -93,7 +93,7 @@ def help_commands(event: DiscordEvent, aws_services: AWSServices) -> ResponseMes
 
 def help_startgg(event: DiscordEvent, aws_services: AWSServices) -> ResponseMessage:
     """Explain how to find a start.gg discriminator and connect Discord on start.gg."""
-    return _reply(bot_messages.HELP_STARTGG)
+    return _reply(bot_messages.HELP_STARTGG).with_suppressed_embeds()
 
 
 def appeal_matchmaking_role(event: DiscordEvent, aws_services: AWSServices) -> ResponseMessage:

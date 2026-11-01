@@ -102,6 +102,7 @@ class TestHelp(unittest.TestCase):
         self.assertIn("start.gg/user/", response.content)
         self.assertIn('Remember to click "Save" after.', response.content)
         self.assertTrue(response.flags & message_flags.EPHEMERAL)
+        self.assertTrue(response.flags & message_flags.SUPPRESS_EMBEDS)
         aws_services.deferred_worker_sqs_queue.send_message.assert_not_called()
 
     def test_help_commands_mentions_fighter_silently(self):
