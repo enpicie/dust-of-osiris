@@ -26,6 +26,11 @@ class ResponseMessage:
         self.flags |= message_flags.SUPPRESS_EMBEDS
         return self
 
+    def with_ephemeral(self) -> "ResponseMessage":
+        """Only the invoking user sees the message."""
+        self.flags |= message_flags.EPHEMERAL
+        return self
+
     def to_dict(self) -> dict:
         data = {
             "content": self.content,

@@ -5,7 +5,7 @@ import time
 import worker_aws_client as aws_client
 import worker_messages
 import discord_followup
-import slow_echo_commands
+import matchmaking_commands
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -14,7 +14,11 @@ logger.setLevel(logging.INFO)
 # deadline. The bot Lambda answers with a placeholder and enqueues here
 # (src/utils/deferred_dispatch.py); the key is the command_name it dispatched.
 _COMMAND_HANDLERS = {
-    "slow-echo": slow_echo_commands.handle_slow_echo,
+    "request-matchmaking-role": matchmaking_commands.handle_request_role,
+    "remove-matchmaking-role": matchmaking_commands.handle_remove_role,
+    "results-view": matchmaking_commands.handle_results_view,
+    "get-fighter-role": matchmaking_commands.handle_get_fighter_role,
+    "remove-fighter-role": matchmaking_commands.handle_remove_fighter_role,
 }
 
 

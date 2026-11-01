@@ -38,12 +38,21 @@ class TestDeferredWorkerHandler(unittest.TestCase):
         self.addCleanup(services_patcher.stop)
 
     def test_known_command_posts_its_result_as_followup(self):
-        worker_handler.handler(_sqs_event("slow-echo", "hi there"), Mock())
+        fake = Mock(return_value={"content": "done hi there", "allowed_mentions": {"parse": []}})
+        with patch.dict(worker_handler._COMMAND_HANDLERS, {"results-view": fake}):
+            worker_handler.handler(_sqs_event("results-view", "hi there"), Mock())
 
+        self.assertEqual(fake.call_args.args[0]["data"]["options"][0]["value"], "hi there")
         args, kwargs = self.mock_followup.call_args
         self.assertEqual(args[:2], ("999", "interaction-token"))
         self.assertIn("hi there", kwargs["content"])
         self.assertEqual(kwargs["allowed_mentions"], {"parse": []})
+
+    def test_every_matchmaking_command_has_a_worker_handler(self):
+        for name in ("request-matchmaking-role", "remove-matchmaking-role", "results-view",
+                     "get-fighter-role", "remove-fighter-role"):
+            with self.subTest(command=name):
+                self.assertIn(name, worker_handler._COMMAND_HANDLERS)
 
     def test_unknown_command_tells_the_user(self):
         worker_handler.handler(_sqs_event("not-registered"), Mock())
@@ -53,8 +62,8 @@ class TestDeferredWorkerHandler(unittest.TestCase):
 
     def test_handler_exception_posts_general_error_instead_of_raising(self):
         # Raising would make SQS redeliver and re-run the command.
-        with patch.dict(worker_handler._COMMAND_HANDLERS, {"slow-echo": Mock(side_effect=RuntimeError("boom"))}):
-            worker_handler.handler(_sqs_event("slow-echo"), Mock())
+        with patch.dict(worker_handler._COMMAND_HANDLERS, {"results-view": Mock(side_effect=RuntimeError("boom"))}):
+            worker_handler.handler(_sqs_event("results-view"), Mock())
 
         self.assertEqual(self.mock_followup.call_args.args[2], worker_messages.GENERAL_ERROR)
 

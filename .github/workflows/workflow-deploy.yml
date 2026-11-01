@@ -48,6 +48,8 @@ on:
         required: true
       DISCORD_BOT_TOKEN:
         required: true
+      STARTGG_API_KEY:
+        required: true
 
 env:
   # MIRROR: terraform/infra/deferred_worker.tf local.deferred_worker_name — keep in sync.
@@ -163,3 +165,4 @@ jobs:
             TF_VAR_deferred_worker_lambda_layer_hash_s3_key=${{ steps.build_layer_deferred_worker.outputs.s3_requirements_key }}
             TF_VAR_discord_public_key=${{ inputs.discord_public_key }}
             TF_VAR_discord_bot_token=${{ secrets.DISCORD_BOT_TOKEN }}
+            TF_VAR_startgg_api_key=${{ secrets.STARTGG_API_KEY }}
