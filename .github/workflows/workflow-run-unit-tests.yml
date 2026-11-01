@@ -1,0 +1,46 @@
+name: 'Run Unit Tests'
+
+on:
+  workflow_call:
+    inputs:
+      python_runtime:
+        description: 'Python version to use (e.g., 3.11)'
+        required: true
+        type: string
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Set up Python ${{ inputs.python_runtime }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python_runtime }}
+
+      - name: Install dependencies and run tests via Makefile
+        run: make test
+
+      - name: Lint via Makefile
+        run: make lint
+
+  terraform-validate:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      # Syntax + reference check only: no backend, no AWS credentials. Runs
+      # before deploy, so a broken reference fails here instead of mid-apply.
+      - name: Validate terraform/infra
+        working-directory: ./terraform/infra
+        run: |
+          terraform init -backend=false -input=false
+          terraform validate

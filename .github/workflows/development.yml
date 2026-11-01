@@ -1,0 +1,98 @@
+name: Dev Pipeline
+
+on:
+  push:
+    branches-ignore:
+      - main
+    tags:
+      - '!*'
+    paths-ignore:
+      - 'scripts/**'
+      - '.github/workflows/workflow-register-commands.yml'
+  workflow_dispatch:
+    inputs:
+      run_register_commands:
+        description: 'Run Discord command registration after deployment'
+        required: false
+        default: false
+        type: boolean
+      force_rebuild_layer:
+        description: 'Force rebuild of all Lambda layers even if requirements.txt is unchanged'
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  read-config:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      APP_NAME: ${{ steps.set-vars.outputs.APP_NAME }}
+      AWS_REGION: ${{ steps.set-vars.outputs.AWS_REGION }}
+      ARTIFACT_S3_BUCKET_DEV: ${{ steps.set-vars.outputs.ARTIFACT_S3_BUCKET_DEV }}
+      PYTHON_RUNTIME: ${{ steps.set-vars.outputs.PYTHON_RUNTIME }}
+      LAMBDA_ARCHITECTURE: ${{ steps.set-vars.outputs.LAMBDA_ARCHITECTURE }}
+      DISCORD_PUBLIC_KEY: ${{ steps.set-vars.outputs.DISCORD_PUBLIC_KEY }}
+      BRANCH_NAME: ${{ steps.set-vars.outputs.BRANCH_NAME }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: Load config
+        id: set-vars
+        run: |
+          set -a
+          source ./config.env
+          set +a
+          SHORT_BRANCH_NAME="${GITHUB_REF_NAME##*/}"
+          echo "APP_NAME=$APP_NAME" >> $GITHUB_OUTPUT
+          echo "AWS_REGION=$AWS_REGION" >> $GITHUB_OUTPUT
+          echo "ARTIFACT_S3_BUCKET_DEV=$ARTIFACT_S3_BUCKET_DEV" >> $GITHUB_OUTPUT
+          echo "PYTHON_RUNTIME=$PYTHON_RUNTIME" >> $GITHUB_OUTPUT
+          echo "LAMBDA_ARCHITECTURE=$LAMBDA_ARCHITECTURE" >> $GITHUB_OUTPUT
+          echo "DISCORD_PUBLIC_KEY=$DISCORD_PUBLIC_KEY_DEV" >> $GITHUB_OUTPUT
+          echo "BRANCH_NAME=$SHORT_BRANCH_NAME" >> $GITHUB_OUTPUT
+
+  unit-test:
+    needs:
+      - read-config
+    permissions:
+      contents: read
+    uses: ./.github/workflows/workflow-run-unit-tests.yml
+    with:
+      python_runtime: ${{ needs.read-config.outputs.PYTHON_RUNTIME }}
+
+  deploy:
+    needs:
+      - read-config
+      - unit-test
+    permissions:
+      id-token: write
+      contents: read
+    uses: ./.github/workflows/workflow-deploy.yml
+    with:
+      app_name: ${{ needs.read-config.outputs.APP_NAME }}
+      aws_region: ${{ needs.read-config.outputs.AWS_REGION }}
+      python_runtime: ${{ needs.read-config.outputs.PYTHON_RUNTIME }}
+      lambda_architecture: ${{ needs.read-config.outputs.LAMBDA_ARCHITECTURE }}
+      discord_public_key: ${{ needs.read-config.outputs.DISCORD_PUBLIC_KEY }}
+      app_version: ${{ needs.read-config.outputs.BRANCH_NAME }}
+      deployment_env: 'dev'
+      artifact_s3_bucket: ${{ needs.read-config.outputs.ARTIFACT_S3_BUCKET_DEV }}
+      force_rebuild_layer: ${{ github.event.inputs.force_rebuild_layer == 'true' }}
+    secrets:
+      AWS_ROLE_ARN_LAMBDA_APIGW_DDB_SQS: ${{ secrets.AWS_ROLE_ARN_LAMBDA_APIGW_DDB_SQS }}
+      AWS_ROLE_ARN_S3: ${{ secrets.AWS_ROLE_ARN_S3 }}
+      DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN_DEV }}
+
+  register-commands:
+    needs: deploy
+    if: ${{ github.event.inputs.run_register_commands == 'true' || github.event.inputs.run_register_commands == true }}
+    permissions:
+      contents: read
+    uses: ./.github/workflows/workflow-register-commands.yml
+    with:
+      environment: 'dev'
+      command_name: 'all'
+    secrets:
+      DISCORD_BOT_TOKEN_DEV: ${{ secrets.DISCORD_BOT_TOKEN_DEV }}
+      DISCORD_BOT_TOKEN_PROD: ${{ secrets.DISCORD_BOT_TOKEN_PROD }}
