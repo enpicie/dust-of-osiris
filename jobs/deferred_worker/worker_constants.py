@@ -1,3 +1,4 @@
+import json
 import os
 
 import boto3
@@ -7,13 +8,24 @@ AWS_REGION = os.environ.get("REGION")
 DISCORD_BOT_TOKEN_SECRET_NAME = os.environ.get("DISCORD_BOT_TOKEN_SECRET_NAME")
 STARTGG_API_KEY_SECRET_NAME = os.environ.get("STARTGG_API_KEY_SECRET_NAME")
 
-# Discord role ID per matchmaking tier, keyed by tier name. Set in
-# terraform/infra/matchmaking_roles.tf; anything that isn't a numeric Discord
-# ID (e.g. the placeholder) means "not configured" and no role is touched.
-MATCHMAKING_ROLE_IDS = {
-    tier: os.environ.get(f"MATCHMAKING_ROLE_ID_{tier.upper()}", "")
-    for tier in ("novice", "fighter", "ascended", "elite")
-}
+
+
+def parse_role_ids(raw: str | None) -> dict[str, str]:
+    """Parse the MATCHMAKING_ROLE_IDS JSON object (tier name -> Discord role ID).
+    Anything unreadable yields {}, which callers treat as "not configured"."""
+    try:
+        parsed = json.loads(raw or "{}")
+    except ValueError:
+        return {}
+    if not isinstance(parsed, dict):
+        return {}
+    return {str(tier): str(role_id) for tier, role_id in parsed.items()}
+
+
+# Discord role ID per matchmaking tier, keyed by lowercase tier name. The only
+# source is terraform/infra/matchmaking_roles.tf, passed in as one JSON env var.
+# A missing or non-numeric ID means "not configured" and no role is touched.
+MATCHMAKING_ROLE_IDS = parse_role_ids(os.environ.get("MATCHMAKING_ROLE_IDS"))
 
 _secret_cache: dict[str, str] = {}
 _secretsmanager_client = None
