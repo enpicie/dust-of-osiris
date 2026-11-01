@@ -49,6 +49,6 @@ HELP = (
     "To ascend from {novice}, you must achieve a result of 2-2 or better in a tournament with 24+ entrants.\n"
     "To reach {ascended}, you must ascend from the [Melt Your Blood](https://start.gg/meltyourblood) series.\n"
     "To become {elite}, you must reach the top cut of a stacked, highly-competitive tournament "
-    "(e.g. Top 12 at CoN 2025, Top 4 CB 2026, requirements vary per event)."
+    "(e.g. Top 16 at CoN 2025, Top 4 CB 2026, requirements vary per event)."
 )
 APPEAL = "If you want to request a higher role than the one you were assigned, please DM @enpicie with supporting results."

@@ -5,8 +5,8 @@ change who qualifies for what, edit QUALIFIERS (or the fighter thresholds);
 nothing else needs to move.
 
 Placements are compared as `placement <= N`. start.gg reports tied placements
-as the top of the tie (5th-6th is 5, 9th-12th is 9, 33rd-48th is 33), so
-"Top 6" / "Top 12" / "Top 48" line up with double-elimination tiers.
+as the top of the tie (5th-6th is 5, 13th-16th is 13, 33rd-48th is 33), so
+"Top 6" / "Top 16" / "Top 48" line up with double-elimination tiers.
 """
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -129,7 +129,7 @@ QUALIFIERS: list[Qualifier] = [
     Qualifier(Tier.ELITE, "1st at a Midweek Melting (24+ entrants)", _series(MIDWEEK_MELTING), 1, min_entrants=24),
     Qualifier(Tier.ELITE, "Top 8 at a TNS MBAACC Netplay bracket", _series(TNS_NETPLAY), 8),
     Qualifier(Tier.ELITE, "Top 8 at Frosty Faustings 2024-2026", _events(FROSTY_2024, FROSTY_2025, FROSTY_2026), 8),
-    Qualifier(Tier.ELITE, "Top 12 at Climax of Night 2024-2025", _events(CLIMAX_OF_NIGHT_2024, CLIMAX_OF_NIGHT_2025), 12),
+    Qualifier(Tier.ELITE, "Top 16 at Climax of Night 2024-2025", _events(CLIMAX_OF_NIGHT_2024, CLIMAX_OF_NIGHT_2025), 16),
     Qualifier(Tier.ELITE, "Top 3 at Climax of Night 2022", _events(CLIMAX_OF_NIGHT_2022), 3),
     Qualifier(Tier.ELITE, "Top 4 at Combo Breaker 2026", _events(COMBO_BREAKER_2026), 4),
     Qualifier(Tier.ELITE, "Top 8 at Eclipse 2026", _events(ECLIPSE_2026), 8),
