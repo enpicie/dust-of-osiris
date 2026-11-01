@@ -137,7 +137,7 @@ class TestHelp(unittest.TestCase):
             "To ascend from <@&101>, you must achieve a result of 2-2 or better in a tournament with 24+ entrants.",
             "To reach <@&103>, you must ascend from the [Melt Your Blood](https://start.gg/meltyourblood) series.",
             "To become <@&104>, you must reach the top cut of a stacked, highly-competitive tournament "
-            "(e.g. Top 12 at CoN 2025, Top 4 CB 2026, requirements vary per event).",
+            "(e.g. Top 16 at CoN 2025, Top 4 CB 2026, requirements vary per event).",
         ]))
         self.assertEqual(response.allowed_mentions, {"parse": []})
         self.assertTrue(response.flags & message_flags.SUPPRESS_NOTIFICATIONS)

@@ -78,10 +78,13 @@ class TestNamedEvents(unittest.TestCase):
     def test_climax_of_night(self):
         self.assertEqual(_tier(_result(rules.CLIMAX_OF_NIGHT_2022, placement=3)), Tier.ELITE)
         self.assertEqual(_tier(_result(rules.CLIMAX_OF_NIGHT_2022, placement=4, wins=0)), Tier.NOVICE)
-        self.assertEqual(_tier(_result(rules.CLIMAX_OF_NIGHT_2024, placement=9)), Tier.ELITE)
+        # 2024-2025: Top 16 is Elite (13th-16th is reported as 13); 17th is not.
+        self.assertEqual(_tier(_result(rules.CLIMAX_OF_NIGHT_2024, placement=13)), Tier.ELITE)
+        self.assertEqual(_tier(_result(rules.CLIMAX_OF_NIGHT_2024, placement=17)), Tier.ASCENDED)
         self.assertEqual(_tier(_result(rules.CLIMAX_OF_NIGHT_2024, placement=25)), Tier.ASCENDED)
         self.assertEqual(_tier(_result(rules.CLIMAX_OF_NIGHT_2024, placement=33, wins=0)), Tier.NOVICE)
-        self.assertEqual(_tier(_result(rules.CLIMAX_OF_NIGHT_2025, placement=9)), Tier.ELITE)
+        self.assertEqual(_tier(_result(rules.CLIMAX_OF_NIGHT_2025, placement=13)), Tier.ELITE)
+        self.assertEqual(_tier(_result(rules.CLIMAX_OF_NIGHT_2025, placement=17)), Tier.ASCENDED)
         self.assertEqual(_tier(_result(rules.CLIMAX_OF_NIGHT_2025, placement=33)), Tier.ASCENDED)
         self.assertEqual(_tier(_result(rules.CLIMAX_OF_NIGHT_2025, placement=49, wins=0)), Tier.NOVICE)
 
