@@ -3,6 +3,7 @@ name: Release Pipeline
 on:
   push:
     tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
       - '[0-9]+.[0-9]+.[0-9]+'
   workflow_dispatch:
     inputs:
@@ -39,7 +40,8 @@ jobs:
 
           # github.ref_name is the tag name on a tag push; fall back to the
           # manual input when triggered via workflow_dispatch.
-          APP_VERSION_PATTERN='^[0-9]+\.[0-9]+\.[0-9]+$'
+          # Tags look like v1.2.3 (or 1.2.3); the version keeps the tag as written.
+          APP_VERSION_PATTERN='^v?[0-9]+\.[0-9]+\.[0-9]+$'
 
           if [[ "${{ github.ref_name }}" =~ $APP_VERSION_PATTERN ]]; then
             APP_VERSION="${{ github.ref_name }}"

@@ -46,7 +46,7 @@ The bot Lambda also uses:
    and redeploy. Give the bot **Manage Roles** and rank its role above the four
    matchmaking roles. Until all four IDs are set, the bot works out tiers but
    changes no roles. See [Matchmaking roles](#matchmaking-roles).
-7. **Go to prod.** Push a version tag (`git tag 1.0.0 && git push origin 1.0.0`).
+7. **Go to prod.** Push a version tag (`git tag v1.0.0 && git push origin v1.0.0`).
    The Release Pipeline deploys prod and registers every command. Point the prod
    app's Interactions Endpoint URL at the prod output the same way as step 4.
 
@@ -214,7 +214,7 @@ Any other secret your bot needs should follow the same pattern.
 |---|---|---|
 | Push to non-`main` branch | Dev Pipeline | tests + lint + `terraform validate` → deploy dev |
 | Manual (Actions tab) | Dev Pipeline | same, optionally registers commands |
-| Push tag `X.Y.Z` | Release Pipeline | tests → deploy prod → register all commands |
+| Push tag `vX.Y.Z` | Release Pipeline | tests → deploy prod → register all commands |
 | Manual | Register Discord Bot Slash Commands | register one command, a prefix (`admin` = `admin-*`), or `all` |
 
 Deploys run as one Terraform root (`terraform/infra`). State is stored in S3 at
