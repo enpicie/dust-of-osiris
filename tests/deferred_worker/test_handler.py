@@ -49,8 +49,7 @@ class TestDeferredWorkerHandler(unittest.TestCase):
         self.assertEqual(kwargs["allowed_mentions"], {"parse": []})
 
     def test_every_matchmaking_command_has_a_worker_handler(self):
-        for name in ("request-matchmaking-role", "remove-matchmaking-role", "results-view",
-                     "get-fighter-role", "remove-fighter-role"):
+        for name in ("request-matchmaking-role", "remove-matchmaking-role", "results-view", "get-fighter-role"):
             with self.subTest(command=name):
                 self.assertIn(name, worker_handler._COMMAND_HANDLERS)
 

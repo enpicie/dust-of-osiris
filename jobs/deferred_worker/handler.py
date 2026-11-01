@@ -18,7 +18,6 @@ _COMMAND_HANDLERS = {
     "remove-matchmaking-role": matchmaking_commands.handle_remove_role,
     "results-view": matchmaking_commands.handle_results_view,
     "get-fighter-role": matchmaking_commands.handle_get_fighter_role,
-    "remove-fighter-role": matchmaking_commands.handle_remove_fighter_role,
 }
 
 

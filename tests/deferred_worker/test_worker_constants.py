@@ -2,6 +2,7 @@ import os
 import re
 import unittest
 
+import commands.matchmaking.matchmaking_commands as src_matchmaking_commands
 import worker_constants as constants
 from matchmaking_rules import Tier
 
@@ -14,7 +15,7 @@ def _role_ids_by_env() -> dict[str, dict[str, str]]:
         source = f.read()
     return {
         env: dict(re.findall(r'(\w+)\s*=\s*"([^"]*)"', body))
-        for env, body in re.findall(r"(\w+) = \{([^{}]*)\}", source)
+        for env, body in re.findall(r"\b(dev|prod) = \{([^{}]*)\}", source)
     }
 
 
@@ -46,6 +47,15 @@ class TestTerraformRoleIds(unittest.TestCase):
                 for role_id in role_ids.values():
                     self.assertRegex(role_id, r"^\d{17,20}$")
                 self.assertEqual(len(set(role_ids.values())), len(role_ids))
+
+
+class TestRoleChoicesMatchTiers(unittest.TestCase):
+    def test_remove_command_choices_are_exactly_the_worker_tiers(self):
+        # MIRROR: src/commands/matchmaking/matchmaking_commands.py ROLE_CHOICES is sent to
+        # the worker, which looks the value up as a Tier name.
+        self.assertEqual(set(src_matchmaking_commands.ROLE_CHOICES), {tier.name.lower() for tier in Tier})
+        for value, label in src_matchmaking_commands.ROLE_CHOICES.items():
+            self.assertEqual(label, Tier[value.upper()].label)
 
 
 if __name__ == "__main__":

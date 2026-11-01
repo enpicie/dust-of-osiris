@@ -19,11 +19,11 @@ _PROFILE_INPUTS = [
 ]
 
 
-def _response(data=None, *, status=200, errors=None) -> Mock:
+def _response(data=None, *, status=200, errors=None, headers=None) -> Mock:
     body = {"data": data}
     if errors:
         body["errors"] = errors
-    return Mock(ok=200 <= status < 300, status_code=status, json=Mock(return_value=body))
+    return Mock(ok=200 <= status < 300, status_code=status, headers=headers or {}, json=Mock(return_value=body))
 
 
 def _event_node(event_id: int, *, entrant=True, placement=3, record=None) -> dict:
@@ -62,7 +62,7 @@ class TestParseProfileSlug(unittest.TestCase):
                 self.assertEqual(startgg_api.parse_profile_slug(value), src_startgg_profile.parse_profile_slug(value))
 
 
-class TestStartggApi(unittest.TestCase):
+class _ApiTestBase(unittest.TestCase):
     def setUp(self):
         key_patcher = patch.object(startgg_api.constants, "get_startgg_api_key", return_value="test-key")
         key_patcher.start()
@@ -70,13 +70,19 @@ class TestStartggApi(unittest.TestCase):
         post_patcher = patch.object(startgg_api.requests, "post")
         self.mock_post = post_patcher.start()
         self.addCleanup(post_patcher.stop)
+        sleep_patcher = patch.object(startgg_api, "_sleep")
+        self.mock_sleep = sleep_patcher.start()
+        self.addCleanup(sleep_patcher.stop)
 
+
+class TestStartggApi(_ApiTestBase):
     def test_fetch_user_returns_linked_discord_ids(self):
         self.mock_post.return_value = _response({"user": {
-            "id": 42, "slug": "user/abc", "authorizations": [{"externalId": "123"}, None],
+            "id": 42, "slug": "user/abc", "player": {"gamerTag": "Tag"},
+            "authorizations": [{"externalId": "123"}, None],
         }})
         user = startgg_api.fetch_user("user/abc")
-        self.assertEqual((user.id, user.slug, user.discord_ids), (42, "user/abc", ["123"]))
+        self.assertEqual((user.id, user.slug, user.discord_ids, user.gamer_tag), (42, "user/abc", ["123"], "Tag"))
         self.assertEqual(self.mock_post.call_args.kwargs["headers"]["Authorization"], "Bearer test-key")
 
     def test_fetch_user_returns_none_for_unknown_slug(self):
@@ -111,17 +117,58 @@ class TestStartggApi(unittest.TestCase):
         ]}}})
         self.assertEqual(startgg_api.fetch_phase_group_placements(3151359), {11: 1, 22: 7})
 
-    def test_http_errors_graphql_errors_and_network_failures_raise_unavailable(self):
-        failures = [
+
+
+class TestRetries(_ApiTestBase):
+    _OK = {"user": {"id": 42, "slug": "user/abc", "authorizations": []}}
+
+    def test_transient_failure_then_success_is_retried(self):
+        transient = [
             _response(status=429),
-            _response({"user": None}, errors=[{"message": "Rate limit exceeded"}]),
+            _response(status=502),
+            _response({"user": None}, errors=[{"message": "Rate limit exceeded - api-token"}]),
             requests.ConnectionError("down"),
+            requests.Timeout("slow"),
         ]
-        for failure in failures:
+        for failure in transient:
             with self.subTest(failure=failure):
-                self.mock_post.side_effect = [failure]
+                self.mock_post.reset_mock()
+                self.mock_sleep.reset_mock()
+                self.mock_post.side_effect = [failure, _response(self._OK)]
+                self.assertEqual(startgg_api.fetch_user("user/abc").id, 42)
+                self.assertEqual(self.mock_post.call_count, 2)
+                self.mock_sleep.assert_called_once_with(1)
+
+    def test_at_most_three_tries_then_unavailable(self):
+        self.mock_post.side_effect = [_response(status=429)] * 5
+        with self.assertRaises(startgg_api.StartggUnavailableError):
+            startgg_api.fetch_user("user/abc")
+        self.assertEqual(self.mock_post.call_count, 3)
+        self.assertEqual([c.args[0] for c in self.mock_sleep.call_args_list], [1, 2])
+
+    def test_retry_after_header_is_honored_and_capped(self):
+        for header, expected_wait in (("5", 5), ("120", 30)):
+            with self.subTest(retry_after=header):
+                self.mock_post.reset_mock()
+                self.mock_sleep.reset_mock()
+                self.mock_post.side_effect = [_response(status=429, headers={"Retry-After": header}), _response(self._OK)]
+                startgg_api.fetch_user("user/abc")
+                self.mock_sleep.assert_called_once_with(expected_wait)
+
+    def test_permanent_failures_are_not_retried(self):
+        permanent = [
+            _response(status=400),
+            _response(status=401),
+            _response({"user": None}, errors=[{"message": "Field 'foo' doesn't exist on type 'User'"}]),
+        ]
+        for failure in permanent:
+            with self.subTest(failure=failure):
+                self.mock_post.reset_mock()
+                self.mock_post.side_effect = [failure, _response(self._OK)]
                 with self.assertRaises(startgg_api.StartggUnavailableError):
                     startgg_api.fetch_user("user/abc")
+                self.assertEqual(self.mock_post.call_count, 1)
+        self.mock_sleep.assert_not_called()
 
 
 if __name__ == "__main__":

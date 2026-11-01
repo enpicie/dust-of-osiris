@@ -73,14 +73,15 @@ resource "aws_lambda_function" "deferred_worker" {
     aws_lambda_layer_version.deferred_worker_layer.arn
   ]
 
-  # MATCHMAKING_ROLE_IDS: the whole tier -> role ID map from
-  # matchmaking_roles.tf, as JSON (its only source).
+  # MATCHMAKING_ROLE_IDS / NOVICE_CHANNEL_ID come from matchmaking_roles.tf
+  # (their only source); the role IDs go in as one JSON map.
   environment {
     variables = {
       REGION                        = var.aws_region
       DISCORD_BOT_TOKEN_SECRET_NAME = aws_secretsmanager_secret.discord_bot_token.name
       STARTGG_API_KEY_SECRET_NAME   = aws_secretsmanager_secret.startgg_api_key.name
       MATCHMAKING_ROLE_IDS          = jsonencode(local.matchmaking_role_ids)
+      NOVICE_CHANNEL_ID             = local.novice_channel_id
     }
   }
 

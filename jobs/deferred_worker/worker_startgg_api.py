@@ -5,6 +5,7 @@ Never log the API key or full responses; log query names, IDs and status only.
 """
 import logging
 import re
+import time
 from dataclasses import dataclass
 
 import requests
@@ -21,6 +22,13 @@ _EVENTS_PER_PAGE = 50          # ~450 query complexity, under start.gg's 1000 ca
 _MAX_EVENT_PAGES = 20          # hard cap: 1000 events
 _PHASE_GROUP_STANDINGS_PER_PAGE = 64
 
+# Retries for transient failures. At most this many tries per request, waiting
+# 1s then 2s between them (or start.gg's Retry-After, capped).
+_MAX_ATTEMPTS = 3
+_BACKOFF_SECONDS = 1
+_MAX_RETRY_WAIT_SECONDS = 30
+_sleep = time.sleep  # patched in tests
+
 
 class StartggUnavailableError(Exception):
     """start.gg could not be reached, rate-limited us, or answered with an error."""
@@ -31,6 +39,7 @@ class StartggUser:
     id: int
     slug: str
     discord_ids: list[str]
+    gamer_tag: str | None = None
 
 
 USER_QUERY = """
@@ -38,6 +47,7 @@ query MatchmakingUser($slug: String!) {
   user(slug: $slug) {
     id
     slug
+    player { gamerTag }
     authorizations(types: [DISCORD]) { externalId }
   }
 }
@@ -88,8 +98,24 @@ def parse_profile_slug(value: str) -> str | None:
     return f"user/{match.group(1)}" if match else None
 
 
-def _post_graphql(query_name: str, query: str, variables: dict) -> dict:
-    """Run one GraphQL query and return its `data`, or raise StartggUnavailableError."""
+class _Retryable(Exception):
+    """A failure worth trying again: network trouble, rate limiting, or a 5xx."""
+
+    def __init__(self, retry_after: float | None = None):
+        super().__init__()
+        self.retry_after = retry_after
+
+
+def _retry_after_seconds(response: requests.Response) -> float | None:
+    try:
+        return float(response.headers.get("Retry-After"))
+    except (TypeError, ValueError):
+        return None
+
+
+def _post_graphql_once(query_name: str, query: str, variables: dict) -> dict:
+    """One GraphQL request. Raises _Retryable for transient failures and
+    StartggUnavailableError for ones a retry won't fix."""
     try:
         response = requests.post(
             STARTGG_API_URL,
@@ -99,18 +125,40 @@ def _post_graphql(query_name: str, query: str, variables: dict) -> dict:
         )
     except requests.RequestException as e:
         logger.warning(f"[startgg] {query_name} request failed: {type(e).__name__}")
-        raise StartggUnavailableError() from e
+        raise _Retryable() from e
 
     logger.info(f"[startgg] {query_name} status={response.status_code}")
+    if response.status_code == 429 or response.status_code >= 500:
+        raise _Retryable(_retry_after_seconds(response))
     if not response.ok:
         raise StartggUnavailableError()
 
     body = response.json()
     if body.get("errors"):
-        messages = [error.get("message") for error in body["errors"]]
+        messages = [error.get("message") or "" for error in body["errors"]]
         logger.error(f"[startgg] {query_name} errors={messages}")
+        if any("rate limit" in message.lower() for message in messages):
+            raise _Retryable()
         raise StartggUnavailableError()
     return body.get("data") or {}
+
+
+def _post_graphql(query_name: str, query: str, variables: dict) -> dict:
+    """Run one GraphQL query and return its `data`, or raise StartggUnavailableError.
+    Transient failures (rate limits, 5xx, network) get at most _MAX_ATTEMPTS
+    tries in total; this runs in the deferred worker, so waiting is fine."""
+    for attempt in range(1, _MAX_ATTEMPTS + 1):
+        try:
+            return _post_graphql_once(query_name, query, variables)
+        except _Retryable as e:
+            if attempt == _MAX_ATTEMPTS:
+                logger.error(f"[startgg] {query_name} giving up after {attempt} tries")
+                raise StartggUnavailableError() from e
+            delay = min(e.retry_after if e.retry_after is not None else _BACKOFF_SECONDS * 2 ** (attempt - 1),
+                        _MAX_RETRY_WAIT_SECONDS)
+            logger.warning(f"[startgg] {query_name} try {attempt}/{_MAX_ATTEMPTS} failed; retrying in {delay:.0f}s")
+            _sleep(delay)
+    raise StartggUnavailableError()  # unreachable: the loop returns or raises
 
 
 def fetch_user(slug: str) -> StartggUser | None:
@@ -123,7 +171,12 @@ def fetch_user(slug: str) -> StartggUser | None:
         for auth in (user.get("authorizations") or [])
         if auth and auth.get("externalId")
     ]
-    return StartggUser(id=int(user["id"]), slug=user.get("slug") or slug, discord_ids=discord_ids)
+    return StartggUser(
+        id=int(user["id"]),
+        slug=user.get("slug") or slug,
+        discord_ids=discord_ids,
+        gamer_tag=(user.get("player") or {}).get("gamerTag"),
+    )
 
 
 def _parse_record(set_record) -> tuple[int, int]:

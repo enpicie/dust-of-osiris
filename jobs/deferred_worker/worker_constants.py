@@ -27,6 +27,9 @@ def parse_role_ids(raw: str | None) -> dict[str, str]:
 # A missing or non-numeric ID means "not configured" and no role is touched.
 MATCHMAKING_ROLE_IDS = parse_role_ids(os.environ.get("MATCHMAKING_ROLE_IDS"))
 
+# Channel Novice players are pointed to for matches (also set in matchmaking_roles.tf).
+NOVICE_CHANNEL_ID = os.environ.get("NOVICE_CHANNEL_ID", "")
+
 _secret_cache: dict[str, str] = {}
 _secretsmanager_client = None
 

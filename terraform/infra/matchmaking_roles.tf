@@ -25,4 +25,12 @@ locals {
   }
 
   matchmaking_role_ids = local.matchmaking_role_ids_by_env[var.deployment_env]
+
+  # Channel Novice players are pointed to for matches (mentioned in replies).
+  novice_channel_id_by_env = {
+    dev  = "1372597783273537607"
+    prod = "1372597783273537607"
+  }
+
+  novice_channel_id = local.novice_channel_id_by_env[var.deployment_env]
 }

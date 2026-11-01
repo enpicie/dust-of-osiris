@@ -117,17 +117,19 @@ Error handling:
 
 ## Commands
 
-All replies are ephemeral (only the caller sees them).
+All replies are ephemeral (only the caller sees them). Replies mention roles but
+never ping or notify anyone (`allowed_mentions` empty plus `SUPPRESS_NOTIFICATIONS`).
 
 | Command | Group | Does |
 |---|---|---|
 | `/ping` | `general` | Health check: endpoint, signature check, dispatch |
 | `/request-matchmaking-role startgg_discriminator` | `matchmaking` | Verify the start.gg account is the caller's, then grant the tier their results earn. If it can't be verified, add Fighter. Deferred |
-| `/remove-matchmaking-role` | `matchmaking` | Remove the caller's Novice, Ascended or Elite role (not Fighter). Deferred |
+| `/remove-matchmaking-role role` | `matchmaking` | Remove exactly the one role the caller picks (Novice, Fighter, Ascended or Elite). An Elite player can drop Ascended and keep Elite. Deferred |
 | `/get-fighter-role` | `matchmaking` | Add the universal Fighter role. Deferred |
-| `/remove-fighter-role` | `matchmaking` | Remove the Fighter role. Deferred |
 | `/results-view startgg_discriminator` | `matchmaking` | List the results the tier is worked out from, and which rule each meets. Deferred |
-| `/matchmaking-help` | `matchmaking` | How to find a start.gg discriminator, connect Discord on start.gg, and use the commands |
+| `/help` | `matchmaking` | How the matchmaking roles work, with each tier's bar (mentions roles silently) |
+| `/help-commands` | `matchmaking` | List the matchmaking commands (mentions @Fighter silently) |
+| `/help-startgg` | `matchmaking` | How to find a start.gg discriminator and connect Discord on start.gg |
 | `/appeal-matchmaking-role` | `matchmaking` | Tell the caller to contact @enpicie with supporting results |
 
 ## Matchmaking roles
@@ -141,7 +143,9 @@ Four roles, weakest to strongest: **Novice**, **Fighter**, **Ascended**,
   Elite is a subset of Ascended, so Elite players hold both.
 - **Fighter is universal.** Anyone can hold it alongside any tier. It's added by
   `/get-fighter-role`, by a Fighter-level result, or as the default when a
-  discriminator can't be verified, and only `/remove-fighter-role` removes it.
+  discriminator can't be verified, and a request never removes it.
+- **Removing is always explicit:** `/remove-matchmaking-role` takes the one role
+  to drop, so nothing else changes by accident.
   Every reply that grants a tier other than Fighter mentions `/get-fighter-role`.
 
 **Linking a player to start.gg.** start.gg can't be searched by Discord ID, so
@@ -230,6 +234,24 @@ make lint
 
 There is no local Discord stack. Interactions need the deployed endpoint, so test
 end to end on dev.
+
+### Live player tier check
+
+[tests/deferred_worker/test_live_player_tiers.py](./tests/deferred_worker/test_live_player_tiers.py)
+looks up known players on the real start.gg API and checks each lands on their
+expected roles (the Discord-account check is skipped; it needs each player's own
+Discord ID). It runs only when `STARTGG_API_KEY` is set, so `make test` stays
+offline. In CI, the unit-test job's **Live player tiers (start.gg)** step runs it
+with the repo secret, prints a report (player tag, discriminator, roles,
+expected roles, reason) to the log and the job summary, and fails the pipeline
+on a mismatch. Players' results change over time; when one stops matching,
+check the report and update `PLAYERS` in that file.
+
+To run it locally:
+
+```bash
+STARTGG_API_KEY=<key> PYTHONPATH=src .venv/bin/pytest tests/deferred_worker/test_live_player_tiers.py -s
+```
 
 ## Conventions
 

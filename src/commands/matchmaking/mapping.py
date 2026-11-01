@@ -1,12 +1,12 @@
 from discord import AppCommandOptionType
 
 from commands.models.command_mapping import CommandMapping
-from commands.models.command_param import CommandParam
+from commands.models.command_param import CommandParam, ParamChoice
 import commands.matchmaking.matchmaking_commands as matchmaking_commands
 
 _DISCRIMINATOR_PARAM = CommandParam(
     name="startgg_discriminator",
-    description="Your start.gg discriminator, e.g. a1b2c3d4 (see /matchmaking-help)",
+    description="Your start.gg discriminator, e.g. a1b2c3d4 (see /help-startgg)",
     param_type=AppCommandOptionType.string,
     required=True,
     choices=None,
@@ -20,17 +20,20 @@ matchmaking_commands_mapping: CommandMapping = {
     },
     "remove-matchmaking-role": {
         "function": matchmaking_commands.remove_matchmaking_role,
-        "description": "Remove your Novice, Ascended or Elite matchmaking role",
-        "params": []
+        "description": "Remove one of your matchmaking roles",
+        "params": [
+            CommandParam(
+                name="role",
+                description="The matchmaking role to remove",
+                param_type=AppCommandOptionType.string,
+                required=True,
+                choices=[ParamChoice(name=label, value=value) for value, label in matchmaking_commands.ROLE_CHOICES.items()],
+            ),
+        ]
     },
     "get-fighter-role": {
         "function": matchmaking_commands.get_fighter_role,
         "description": "Get the Fighter role, open to everyone",
-        "params": []
-    },
-    "remove-fighter-role": {
-        "function": matchmaking_commands.remove_fighter_role,
-        "description": "Remove your Fighter role",
         "params": []
     },
     "results-view": {
@@ -38,9 +41,19 @@ matchmaking_commands_mapping: CommandMapping = {
         "description": "See the start.gg results your matchmaking role is based on",
         "params": [_DISCRIMINATOR_PARAM]
     },
-    "matchmaking-help": {
-        "function": matchmaking_commands.matchmaking_help,
-        "description": "How to find your start.gg discriminator and use the matchmaking commands",
+    "help": {
+        "function": matchmaking_commands.help_overview,
+        "description": "How the matchmaking roles work",
+        "params": []
+    },
+    "help-commands": {
+        "function": matchmaking_commands.help_commands,
+        "description": "List the matchmaking commands",
+        "params": []
+    },
+    "help-startgg": {
+        "function": matchmaking_commands.help_startgg,
+        "description": "How to find your start.gg discriminator and connect Discord on start.gg",
         "params": []
     },
     "appeal-matchmaking-role": {

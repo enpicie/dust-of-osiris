@@ -4,14 +4,14 @@ work out their tier (matchmaking_rules), and grant or remove the role.
 Each tier is a fixed bar to clear, so roles only move up: a request that earns a
 higher tier removes lower level roles (in practice, Novice), and a request that
 comes out lower than what the member holds changes nothing. Elite players also
-hold Ascended (Elite is a subset of it). Fighter is the universal role anyone can hold alongside any
-tier: it is added by /get-fighter-role, by a Fighter-tier result, or as the
-default when a discriminator can't be verified, and only /remove-fighter-role
-removes it. Only the four matchmaking role IDs are ever added or removed. Until
-all four are configured, no role is touched at all.
+hold Ascended (Elite is a subset of it). Fighter is the universal role anyone
+can hold alongside any tier: it is added by /get-fighter-role, by a
+Fighter-tier result, or as the default when a discriminator can't be verified,
+and a request never removes it. /remove-matchmaking-role removes exactly the one
+role the member names. Only the four matchmaking role IDs are ever added or
+removed. Until all four are configured, no role is touched at all.
 """
 import logging
-from collections import Counter
 from dataclasses import replace
 from datetime import datetime, timezone
 
@@ -23,13 +23,16 @@ import worker_startgg_api as startgg_api
 from matchmaking_rules import Assessment, EventResult, Tier
 from worker_aws_services import AWSServices
 from worker_discord_roles import RoleUpdateError
-from worker_startgg_api import StartggUnavailableError
+from worker_startgg_api import StartggUnavailableError, StartggUser
 
 logger = logging.getLogger()
 
+# https://discord.com/developers/docs/resources/message#message-object-message-flags
+SUPPRESS_EMBEDS = 1 << 2
 EPHEMERAL = 1 << 6
-_DISCORD_MESSAGE_LIMIT = 2000
-_HITS_SHOWN_PER_QUALIFIER = 3
+SUPPRESS_NOTIFICATIONS = 1 << 12
+_RESULTS_SHOWN = 5
+STARTGG_PROFILE_URL = "https://www.start.gg/{slug}"
 
 
 class _Refusal(Exception):
@@ -37,8 +40,11 @@ class _Refusal(Exception):
 
 
 def _reply(content: str) -> dict:
-    # Ephemeral, and never pings: messages name roles but must not mention them.
-    return {"content": content, "allowed_mentions": {"parse": []}, "flags": EPHEMERAL}
+    """Ephemeral, with silent mentions: roles render as mentions but nobody is
+    pinged or notified (same as ResponseMessage.with_silent_pings in src).
+    Link previews are suppressed so start.gg links stay one line."""
+    flags = EPHEMERAL | SUPPRESS_NOTIFICATIONS | SUPPRESS_EMBEDS
+    return {"content": content, "allowed_mentions": {"parse": []}, "flags": flags}
 
 
 def _option(event_body: dict, name: str):
@@ -73,23 +79,32 @@ def _apply_placement_overrides(results: list[EventResult]) -> list[EventResult]:
     return corrected
 
 
-def _verified_results(profile: str, discord_user_id: str) -> tuple[str, list[EventResult]]:
-    """Results for a start.gg profile, only if that profile is connected to this Discord user."""
-    slug = startgg_api.parse_profile_slug(profile)
+def find_user(discriminator: str) -> StartggUser:
+    """The start.gg user for a discriminator (or pasted profile link)."""
+    slug = startgg_api.parse_profile_slug(discriminator)
     if slug is None:
         raise _Refusal(messages.INVALID_STARTGG_PROFILE)
-
     user = startgg_api.fetch_user(slug)
     if user is None:
         raise _Refusal(messages.STARTGG_PROFILE_NOT_FOUND)
+    return user
+
+
+def player_results(user: StartggUser) -> list[EventResult]:
+    """Every MBAACC result for a start.gg user, with placement overrides applied."""
+    return _apply_placement_overrides(startgg_api.fetch_mbaacc_results(user.slug, user.id))
+
+
+def _verified_results(discriminator: str, discord_user_id: str) -> tuple[StartggUser, list[EventResult]]:
+    """Results for a start.gg account, only if it is connected to this Discord
+    user. The Discord check happens before any results are fetched."""
+    user = find_user(discriminator)
     if not user.discord_ids:
         raise _Refusal(messages.STARTGG_NOT_LINKED)
     if discord_user_id not in user.discord_ids:
         logger.info(f"[matchmaking] profile {user.slug} is linked to a different Discord user than {discord_user_id}")
         raise _Refusal(messages.STARTGG_LINKED_TO_SOMEONE_ELSE)
-
-    results = startgg_api.fetch_mbaacc_results(user.slug, user.id)
-    return user.slug, _apply_placement_overrides(results)
+    return user, player_results(user)
 
 
 # ── Formatting ───────────────────────────────────────────────────────────────
@@ -113,54 +128,71 @@ def _placement(result: EventResult) -> str:
     return f"no final placement, {result.num_entrants} entrants"
 
 
-def _event_title(result: EventResult, shared_tournaments: set[str]) -> str:
-    # Tournament name alone, unless the player has several events in it.
-    if result.tournament_name in shared_tournaments:
-        return f"{result.tournament_name} ({result.event_name})"
-    return result.tournament_name
+def _describe(result: EventResult) -> str:
+    # The tournament name carries the edition, e.g. "Midweek Melting 41".
+    return f"{_placement(result)} at {result.tournament_name} ({result.wins}-{result.losses}, {_date(result)})"
 
 
-def _describe(result: EventResult, shared_tournaments: set[str] = frozenset()) -> str:
-    return (
-        f"{_placement(result)} at {_event_title(result, shared_tournaments)} "
-        f"({result.wins}-{result.losses}, {_date(result)})"
-    )
+def _role_mention(tier: Tier, role_ids: dict[Tier, str] | None) -> str:
+    """A role mention (sent silently), or the bold label when role IDs are unset."""
+    # MIRROR: src/utils/message_helper.py get_role_ping
+    return f"<@&{role_ids[tier]}>" if role_ids else f"**{tier.label}**"
 
 
-def _qualifying_line(assessment: Assessment) -> str:
-    """Why the player landed on their tier, in one line."""
-    if assessment.tier == Tier.NOVICE:
-        return messages.NOVICE_EXPLANATION.format(fighter=rules.FIGHTER_LABEL)
-    if assessment.tier == Tier.FIGHTER:
-        return messages.QUALIFYING_RESULT.format(
-            label=rules.FIGHTER_LABEL, result=_describe(assessment.fighter_results[0])
-        )
-    qualifier, hits = next((q, h) for q, h in assessment.met if q.tier == assessment.tier)
-    return messages.QUALIFYING_RESULT.format(label=qualifier.label, result=_describe(hits[0]))
-
-
-def _fit(lines: list[str]) -> str:
-    """Join lines, dropping trailing ones (with a count) to stay under Discord's limit."""
-    out = []
-    for i, line in enumerate(lines):
-        candidate = "\n".join(out + [line])
-        footer = messages.RESULTS_TRUNCATED.format(count=len(lines) - i)
-        if len(candidate) + len(footer) + 1 > _DISCORD_MESSAGE_LIMIT:
-            return "\n".join(out + [footer])
-        out.append(line)
-    return "\n".join(out)
-
-
-# ── Role changes ─────────────────────────────────────────────────────────────
-
-def _role_names(tier: Tier) -> dict:
-    """Format args for ROLE_GRANTED / ROLE_ALREADY_HELD: the tier's role names and 'role(s)'."""
+def _role_names(tier: Tier, role_ids: dict[Tier, str] | None) -> dict:
+    """Format args {roles, noun} for the tier's role(s), e.g. "@Elite and @Ascended"."""
     tiers = rules.roles_for(tier)
     return {
-        "roles": " and ".join(f"**{t.label}**" for t in tiers),
+        "roles": " and ".join(_role_mention(t, role_ids) for t in tiers),
         "noun": "roles" if len(tiers) > 1 else "role",
     }
 
+
+def _hint(tier: Tier) -> str:
+    return "\n" + messages.TIER_HINTS[tier.name.lower()]
+
+
+def _no_results_line(role_ids: dict[Tier, str] | None) -> str:
+    channel = f"<#{constants.NOVICE_CHANNEL_ID}>" if constants.NOVICE_CHANNEL_ID else messages.NOVICE_CHANNEL_FALLBACK
+    return messages.NO_RESULTS_FOUND.format(novice=_role_mention(Tier.NOVICE, role_ids), channel=channel)
+
+
+def _qualifying_results(assessment: Assessment) -> list[EventResult]:
+    """The results that earned the assessed tier, each once, most recent first."""
+    if assessment.tier == Tier.FIGHTER:
+        hits = assessment.fighter_results
+    else:
+        hits = [hit for q, rule_hits in assessment.met if q.tier == assessment.tier for hit in rule_hits]
+    unique = {hit.event_id: hit for hit in hits}
+    return sorted(unique.values(), key=lambda r: r.start_at or 0, reverse=True)
+
+
+def _grant_detail(assessment: Assessment, results: list[EventResult], role_ids: dict[Tier, str] | None) -> str:
+    """Lines under "You now have ...": why, then the Fighter reminder. Ascended
+    is explained by the Melt Your Blood bar rather than individual results."""
+    tier = assessment.tier
+    if tier == Tier.NOVICE:
+        detail = (_no_results_line(role_ids) if not results else "") + _hint(tier)
+    elif tier == Tier.ASCENDED:
+        detail = messages.ASCENDED_BAR
+    else:
+        detail = messages.QUALIFYING_RESULT.format(result=_describe(_qualifying_results(assessment)[0]))
+    return detail + _fighter_line(tier, role_ids)
+
+
+def _already_held_detail(tier: Tier, results: list[EventResult], role_ids: dict[Tier, str] | None) -> str:
+    """Lines under "You already have ...": how to move up, then the Fighter reminder."""
+    no_results = _no_results_line(role_ids) if tier == Tier.NOVICE and not results else ""
+    return no_results + _hint(tier) + _fighter_line(tier, role_ids)
+
+
+def _fighter_line(tier: Tier, role_ids: dict[Tier, str] | None) -> str:
+    if tier == Tier.FIGHTER:
+        return ""
+    return messages.FIGHTER_OPEN_TO_EVERYONE.format(fighter=_role_mention(Tier.FIGHTER, role_ids))
+
+
+# ── Role changes ─────────────────────────────────────────────────────────────
 
 def _change_roles(guild_id: str, user_id: str, member_roles: list[str], to_add: list[str], to_remove: list[str]) -> bool:
     """Apply role changes, adding before removing so a failure never leaves the
@@ -202,42 +234,40 @@ def handle_request_role(event_body: dict, aws_services: AWSServices) -> dict:
     try:
         guild_id, user_id, member_roles = _member(event_body)
         discriminator = _option(event_body, "startgg_discriminator") or ""
+        role_ids = _configured_role_ids()
 
         try:
             _, results = _verified_results(discriminator, user_id)
         except _Refusal as refusal:
             logger.info(f"[matchmaking] request user={user_id} guild={guild_id} unverified; defaulting to fighter")
-            role_ids = _configured_role_ids()
             detail = f"\n{refusal}{messages.LINK_DISCORD_TO_STARTGG}"
             if role_ids is None:
-                return _reply(messages.ROLES_NOT_CONFIGURED.format(**_role_names(Tier.FIGHTER)) + detail)
+                return _reply(messages.ROLES_NOT_CONFIGURED.format(**_role_names(Tier.FIGHTER, None)) + detail)
             changed = _change_roles(guild_id, user_id, member_roles, [role_ids[Tier.FIGHTER]], [])
             headline = messages.ROLE_GRANTED if changed else messages.ROLE_ALREADY_HELD
-            return _reply(headline.format(**_role_names(Tier.FIGHTER)) + detail)
+            return _reply(headline.format(**_role_names(Tier.FIGHTER, role_ids)) + detail)
 
         assessment = rules.assess(results)
         tier = assessment.tier
         logger.info(f"[matchmaking] request user={user_id} guild={guild_id} tier={tier.name}")
 
-        detail = _qualifying_line(assessment)
-        if tier != Tier.FIGHTER:
-            detail += messages.FIGHTER_OPEN_TO_EVERYONE
-        if tier != Tier.ELITE:
-            detail += messages.APPEAL_HINT
-
-        role_ids = _configured_role_ids()
         if role_ids is None:
             logger.warning("[matchmaking] role IDs not configured; no roles changed")
-            return _reply(messages.ROLES_NOT_CONFIGURED.format(**_role_names(tier)) + detail)
+            return _reply(messages.ROLES_NOT_CONFIGURED.format(**_role_names(tier, None))
+                          + _grant_detail(assessment, results, None))
 
         held = _held_level(member_roles, role_ids)
         if held is not None and held > tier:
+            # Results don't get deleted, so this means start.gg is missing some.
             logger.info(f"[matchmaking] user={user_id} keeps {held.name}; results now say {tier.name}")
-            return _reply(messages.ROLE_ALREADY_HIGHER.format(**_role_names(held), tier=tier.label))
+            return _reply(messages.ROLE_ALREADY_HELD.format(**_role_names(held, role_ids))
+                          + messages.RESULTS_MAY_BE_MISSING.format(roles=_role_mention(tier, role_ids)))
 
-        changed = _grant_tier_roles(guild_id, user_id, member_roles, role_ids, tier)
-        headline = messages.ROLE_GRANTED if changed else messages.ROLE_ALREADY_HELD
-        return _reply(headline.format(**_role_names(tier)) + detail)
+        if _grant_tier_roles(guild_id, user_id, member_roles, role_ids, tier):
+            return _reply(messages.ROLE_GRANTED.format(**_role_names(tier, role_ids))
+                          + _grant_detail(assessment, results, role_ids))
+        return _reply(messages.ROLE_ALREADY_HELD.format(**_role_names(tier, role_ids))
+                      + _already_held_detail(tier, results, role_ids))
     except StartggUnavailableError:
         return _reply(messages.STARTGG_UNAVAILABLE)
     except RoleUpdateError as e:
@@ -246,25 +276,22 @@ def handle_request_role(event_body: dict, aws_services: AWSServices) -> dict:
 
 
 def handle_remove_role(event_body: dict, aws_services: AWSServices) -> dict:
-    """/remove-matchmaking-role: remove the member's tier roles (Novice, Ascended,
-    Elite). Fighter is managed separately with /remove-fighter-role."""
+    """/remove-matchmaking-role role: remove exactly the one named role (Novice,
+    Fighter, Ascended or Elite). Naming it keeps removals intentional, e.g. an
+    Elite player can drop Ascended and keep Elite."""
     try:
         guild_id, user_id, member_roles = _member(event_body)
-        role_ids = _configured_role_ids()
-        if role_ids is None:
-            logger.warning("[matchmaking] role IDs not configured; no roles changed")
-            return _reply(messages.NO_ROLE_TO_REMOVE)
+        tier = Tier.__members__.get(str(_option(event_body, "role") or "").upper())
+        if tier is None:
+            return _reply(messages.UNKNOWN_ROLE)
 
-        held = [tier for tier in Tier if tier != Tier.FIGHTER and role_ids[tier] in member_roles]
-        keeps_fighter = role_ids[Tier.FIGHTER] in member_roles
-        fighter_hint = messages.FIGHTER_KEPT if keeps_fighter else ""
-        if not held:
-            return _reply(messages.NO_ROLE_TO_REMOVE + fighter_hint)
-        for tier in held:
-            discord_roles.remove_member_role(guild_id, user_id, role_ids[tier])
-        logger.info(f"[matchmaking] removed user={user_id} guild={guild_id} tiers={[t.name for t in held]}")
-        removed = {"roles": " and ".join(f"**{t.label}**" for t in held), "noun": "roles" if len(held) > 1 else "role"}
-        return _reply(messages.ROLES_REMOVED.format(**removed) + fighter_hint)
+        role_ids = _configured_role_ids()
+        if role_ids is None or role_ids[tier] not in member_roles:
+            return _reply(messages.ROLE_NOT_HELD.format(role=_role_mention(tier, role_ids)))
+
+        discord_roles.remove_member_role(guild_id, user_id, role_ids[tier])
+        logger.info(f"[matchmaking] removed user={user_id} guild={guild_id} tier={tier.name}")
+        return _reply(messages.ROLES_REMOVED.format(roles=_role_mention(tier, role_ids), noun="role"))
     except RoleUpdateError as e:
         logger.error(f"[matchmaking] role removal failed: {e}")
         return _reply(messages.ROLE_UPDATE_FAILED)
@@ -277,66 +304,40 @@ def handle_get_fighter_role(event_body: dict, aws_services: AWSServices) -> dict
         role_ids = _configured_role_ids()
         if role_ids is None:
             logger.warning("[matchmaking] role IDs not configured; no roles changed")
-            return _reply(messages.ROLES_NOT_CONFIGURED.format(**_role_names(Tier.FIGHTER)))
+            return _reply(messages.ROLES_NOT_CONFIGURED.format(**_role_names(Tier.FIGHTER, None)))
         changed = _change_roles(guild_id, user_id, member_roles, [role_ids[Tier.FIGHTER]], [])
         logger.info(f"[matchmaking] get fighter user={user_id} guild={guild_id} changed={changed}")
         headline = messages.ROLE_GRANTED if changed else messages.ROLE_ALREADY_HELD
-        return _reply(headline.format(**_role_names(Tier.FIGHTER)))
+        return _reply(headline.format(**_role_names(Tier.FIGHTER, role_ids)))
     except RoleUpdateError as e:
         logger.error(f"[matchmaking] fighter grant failed: {e}")
         return _reply(messages.ROLE_UPDATE_FAILED)
 
 
-def handle_remove_fighter_role(event_body: dict, aws_services: AWSServices) -> dict:
-    """/remove-fighter-role: remove only the Fighter role."""
-    try:
-        guild_id, user_id, member_roles = _member(event_body)
-        role_ids = _configured_role_ids()
-        if role_ids is None or role_ids[Tier.FIGHTER] not in member_roles:
-            return _reply(messages.NO_FIGHTER_TO_REMOVE)
-        discord_roles.remove_member_role(guild_id, user_id, role_ids[Tier.FIGHTER])
-        logger.info(f"[matchmaking] removed fighter user={user_id} guild={guild_id}")
-        return _reply(messages.ROLES_REMOVED.format(**_role_names(Tier.FIGHTER)))
-    except RoleUpdateError as e:
-        logger.error(f"[matchmaking] fighter removal failed: {e}")
-        return _reply(messages.ROLE_UPDATE_FAILED)
-
-
 def handle_results_view(event_body: dict, aws_services: AWSServices) -> dict:
-    """/results-view startgg_discriminator: show the results the tier is worked out from."""
+    """/results-view startgg_discriminator: show the results behind the tier the
+    player's results earn (only that tier; the full history is on start.gg)."""
     try:
         _, user_id, _ = _member(event_body)
-        slug, results = _verified_results(_option(event_body, "startgg_discriminator") or "", user_id)
+        user, results = _verified_results(_option(event_body, "startgg_discriminator") or "", user_id)
     except _Refusal as refusal:
-        return _reply(str(refusal))
+        return _reply(f"{refusal}{messages.LINK_DISCORD_TO_STARTGG}")
     except StartggUnavailableError:
         return _reply(messages.STARTGG_UNAVAILABLE)
 
+    role_ids = _configured_role_ids()
     assessment = rules.assess(results)
-    tournament_counts = Counter(r.tournament_name for r in results)
-    shared = {name for name, count in tournament_counts.items() if count > 1}
+    tier = assessment.tier
+    content = messages.RESULTS_HEADER.format(player=user.gamer_tag or user.slug, slug=user.slug)
+    content += messages.RESULTS_POINT_TO.format(**_role_names(tier, role_ids))
+    if results:
+        content += messages.RESULTS_CHECKED.format(count=len(results), events="event" if len(results) == 1 else "events")
 
-    lines = [messages.RESULTS_HEADER.format(slug=slug, tier=assessment.tier.label, count=len(results))]
-    if not results:
-        lines.append(messages.RESULTS_NONE)
-        return _reply("\n".join(lines))
+    if tier == Tier.NOVICE:
+        return _reply(content + (_no_results_line(role_ids) if not results else "") + _hint(tier))
+    if tier == Tier.ASCENDED:
+        return _reply(content + messages.ASCENDED_BAR)
 
-    shown: set[int] = set()
-    sections = [(q.tier, q.label, hits) for q, hits in sorted(assessment.met, key=lambda m: -m[0].tier)]
-    if assessment.fighter_results:
-        sections.append((Tier.FIGHTER, rules.FIGHTER_LABEL, assessment.fighter_results))
-    if sections:
-        lines.append(messages.RESULTS_QUALIFYING_HEADER)
-        for tier, label, hits in sections:
-            lines.append(f"**{tier.label}**: {label}")
-            for hit in hits[:_HITS_SHOWN_PER_QUALIFIER]:
-                lines.append(f"• {_describe(hit, shared)}")
-                shown.add(hit.event_id)
-
-    others = sorted((r for r in results if r.event_id not in shown), key=lambda r: r.start_at or 0, reverse=True)
-    if others:
-        lines.append(messages.RESULTS_OTHER_HEADER)
-        lines.extend(f"• {_describe(r, shared)}" for r in others)
-
-    # Long histories overflow into the trailing "other results" lines, which get cut first.
-    return _reply(_fit(lines))
+    content += messages.RESULTS_QUALIFYING_LINK.format(url=STARTGG_PROFILE_URL.format(slug=user.slug))
+    content += "".join(f"\n• {_describe(hit)}" for hit in _qualifying_results(assessment)[:_RESULTS_SHOWN])
+    return _reply(content)

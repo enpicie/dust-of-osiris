@@ -60,6 +60,8 @@ jobs:
     uses: ./.github/workflows/workflow-run-unit-tests.yml
     with:
       python_runtime: ${{ needs.read-config.outputs.PYTHON_RUNTIME }}
+    secrets:
+      STARTGG_API_KEY: ${{ secrets.STARTGG_API_KEY }}
 
   deploy:
     needs:
