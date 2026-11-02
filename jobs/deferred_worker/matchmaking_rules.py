@@ -41,19 +41,29 @@ class EventResult:
 
 
 @dataclass(frozen=True)
+class EventMatch:
+    """Which events a qualifier covers, and how to show them to people (the
+    rules page in docs/ is generated from these)."""
+    name: str                          # e.g. "Frosty Faustings"
+    matches: Callable[[EventResult], bool]
+    links: tuple[tuple[str, str], ...] = ()   # (label, start.gg URL)
+    series: bool = False               # matched by name: any edition counts
+
+
+@dataclass(frozen=True)
 class Qualifier:
     """One way to earn a tier: a placement in a set of events, optionally
     gated on bracket size and date, possibly required more than once."""
     tier: Tier
     label: str
-    applies_to: Callable[[EventResult], bool]
+    events: EventMatch
     max_placement: int
     min_entrants: int = 0
     earliest_start: datetime | None = None
     times_required: int = 1
 
     def is_met_by(self, result: EventResult) -> bool:
-        if not self.applies_to(result):
+        if not self.events.matches(result):
             return False
         if result.placement is None or result.placement > self.max_placement:
             return False
@@ -76,16 +86,32 @@ class Assessment:
 
 # ── Events named by link ─────────────────────────────────────────────────────
 # Matched by start.gg event ID (stable even if an organizer edits the slug).
-FROSTY_2024 = 1002935    # vortex-gallery-at-frosty-faustings-xvi/event/melty-blood-actress-again-current-code-pc
-FROSTY_2025 = 1212830    # frosty-faustings-xvii-2025/event/melty-blood-actress-again-current-code
-FROSTY_2026 = 1450995    # frosty-faustings-xviii-2026/event/melty-blood-actress-again-current-code
-COMBO_BREAKER_2024 = 1049453  # all-in-together-2024-combo-breaker-community-tournaments/event/melty-blood-actress-again-current-code
-COMBO_BREAKER_2025 = 1335587  # all-in-together-2025-combo-breaker-community-tournaments/event/melty-blood-actress-again-current-code
-COMBO_BREAKER_2026 = 1528957  # combo-breaker-2026/event/melty-blood-actress-again-current-code
-CLIMAX_OF_NIGHT_2022 = 723078   # climax-of-night-season-5-moonstrike/event/bloodstruck-mbaacc-singles
-CLIMAX_OF_NIGHT_2024 = 1130786  # climax-of-night-season-6-strong-hold/event/strong-blood-mbaacc-singles
-CLIMAX_OF_NIGHT_2025 = 1390782  # climax-of-night-final-season-breakadawn/event/a-bloody-finale-mbaacc-singles
-ECLIPSE_2026 = 1635293   # eclipse-1st-cour/event/bloody-fights-mbaacc-singles
+FROSTY_2024 = 1002935
+FROSTY_2025 = 1212830
+FROSTY_2026 = 1450995
+COMBO_BREAKER_2024 = 1049453
+COMBO_BREAKER_2025 = 1335587
+COMBO_BREAKER_2026 = 1528957
+CLIMAX_OF_NIGHT_2022 = 723078
+CLIMAX_OF_NIGHT_2024 = 1130786
+CLIMAX_OF_NIGHT_2025 = 1390782
+ECLIPSE_2026 = 1635293
+
+STARTGG_URL = "https://www.start.gg/"
+
+# Event ID -> (short label, start.gg event path), for links on the rules page.
+EVENT_PAGES = {
+    FROSTY_2024: ("2024", "tournament/vortex-gallery-at-frosty-faustings-xvi/event/melty-blood-actress-again-current-code-pc"),
+    FROSTY_2025: ("2025", "tournament/frosty-faustings-xvii-2025/event/melty-blood-actress-again-current-code"),
+    FROSTY_2026: ("2026", "tournament/frosty-faustings-xviii-2026/event/melty-blood-actress-again-current-code"),
+    COMBO_BREAKER_2024: ("2024", "tournament/all-in-together-2024-combo-breaker-community-tournaments/event/melty-blood-actress-again-current-code"),
+    COMBO_BREAKER_2025: ("2025", "tournament/all-in-together-2025-combo-breaker-community-tournaments/event/melty-blood-actress-again-current-code"),
+    COMBO_BREAKER_2026: ("2026", "tournament/combo-breaker-2026/event/melty-blood-actress-again-current-code"),
+    CLIMAX_OF_NIGHT_2022: ("Season 5 (2022)", "tournament/climax-of-night-season-5-moonstrike/event/bloodstruck-mbaacc-singles"),
+    CLIMAX_OF_NIGHT_2024: ("Season 6 (2024)", "tournament/climax-of-night-season-6-strong-hold/event/strong-blood-mbaacc-singles"),
+    CLIMAX_OF_NIGHT_2025: ("Final Season (2025)", "tournament/climax-of-night-final-season-breakadawn/event/a-bloody-finale-mbaacc-singles"),
+    ECLIPSE_2026: ("1st Cour (2026)", "tournament/eclipse-1st-cour/event/bloody-fights-mbaacc-singles"),
+}
 
 # Events whose event-level standings are wrong. Placements come from the named
 # phase group's standings instead; an entrant outside that group has no
@@ -104,47 +130,54 @@ FIGHTER_MIN_ENTRANTS = 24
 FIGHTER_MIN_WINS = 2
 
 
-def _events(*event_ids: int) -> Callable[[EventResult], bool]:
+def _events(name: str, *event_ids: int) -> EventMatch:
+    """Specific events, matched by start.gg event ID."""
     wanted = frozenset(event_ids)
-    return lambda result: result.event_id in wanted
+    links = tuple((EVENT_PAGES[e][0], STARTGG_URL + EVENT_PAGES[e][1]) for e in event_ids)
+    return EventMatch(name=name, matches=lambda result: result.event_id in wanted, links=links)
 
 
-def _series(name: str) -> Callable[[EventResult], bool]:
-    """A series' main bracket: tournament or event name contains `name`
+def _series(match_text: str, name: str, links: tuple[tuple[str, str], ...] = ()) -> EventMatch:
+    """A series' main bracket: tournament or event name contains `match_text`
     (case-insensitive), excluding redemption brackets."""
-    needle = name.casefold()
+    needle = match_text.casefold()
 
-    def applies_to(result: EventResult) -> bool:
+    def matches(result: EventResult) -> bool:
         if "redemption" in result.event_name.casefold():
             return False
         return needle in result.tournament_name.casefold() or needle in result.event_name.casefold()
 
-    return applies_to
+    return EventMatch(name=name, matches=matches, links=links, series=True)
+
+
+_MIDWEEK = _series(MIDWEEK_MELTING, "Midweek Melting")
+_TNS = _series(TNS_NETPLAY, "TNS MBAACC Netplay bracket")
+_MELT_YOUR_BLOOD = _series(MELT_YOUR_BLOOD, "Melt Your Blood", links=(("Latest", "https://start.gg/meltyourblood"),))
 
 
 _JAN_1_2024 = datetime(2024, 1, 1, tzinfo=timezone.utc)
 
 QUALIFIERS: list[Qualifier] = [
     # ── Elite ────────────────────────────────────────────────────────────────
-    Qualifier(Tier.ELITE, "1st at a Midweek Melting (24+ entrants)", _series(MIDWEEK_MELTING), 1, min_entrants=24),
-    Qualifier(Tier.ELITE, "Top 8 at a TNS MBAACC Netplay bracket", _series(TNS_NETPLAY), 8),
-    Qualifier(Tier.ELITE, "Top 8 at Frosty Faustings 2024-2026", _events(FROSTY_2024, FROSTY_2025, FROSTY_2026), 8),
-    Qualifier(Tier.ELITE, "Top 16 at Climax of Night 2024-2025", _events(CLIMAX_OF_NIGHT_2024, CLIMAX_OF_NIGHT_2025), 16),
-    Qualifier(Tier.ELITE, "Top 3 at Climax of Night 2022", _events(CLIMAX_OF_NIGHT_2022), 3),
-    Qualifier(Tier.ELITE, "Top 4 at Combo Breaker 2026", _events(COMBO_BREAKER_2026), 4),
-    Qualifier(Tier.ELITE, "Top 8 at Eclipse 2026", _events(ECLIPSE_2026), 8),
+    Qualifier(Tier.ELITE, "1st at a Midweek Melting (24+ entrants)", _MIDWEEK, 1, min_entrants=24),
+    Qualifier(Tier.ELITE, "Top 8 at a TNS MBAACC Netplay bracket", _TNS, 8),
+    Qualifier(Tier.ELITE, "Top 8 at Frosty Faustings 2024-2026", _events("Frosty Faustings", FROSTY_2024, FROSTY_2025, FROSTY_2026), 8),
+    Qualifier(Tier.ELITE, "Top 16 at Climax of Night 2024-2025", _events("Climax of Night", CLIMAX_OF_NIGHT_2024, CLIMAX_OF_NIGHT_2025), 16),
+    Qualifier(Tier.ELITE, "Top 3 at Climax of Night 2022", _events("Climax of Night", CLIMAX_OF_NIGHT_2022), 3),
+    Qualifier(Tier.ELITE, "Top 4 at Combo Breaker 2026", _events("Combo Breaker", COMBO_BREAKER_2026), 4),
+    Qualifier(Tier.ELITE, "Top 8 at Eclipse 2026", _events("Eclipse", ECLIPSE_2026), 8),
     # ── Ascended ─────────────────────────────────────────────────────────────
-    Qualifier(Tier.ASCENDED, "Top 4 at a Midweek Melting (20+ entrants, 2024 onward)", _series(MIDWEEK_MELTING), 4,
+    Qualifier(Tier.ASCENDED, "Top 4 at a Midweek Melting (20+ entrants, 2024 onward)", _MIDWEEK, 4,
               min_entrants=20, earliest_start=_JAN_1_2024),
-    Qualifier(Tier.ASCENDED, "Top 16 at a TNS MBAACC Netplay bracket", _series(TNS_NETPLAY), 16),
-    Qualifier(Tier.ASCENDED, "Top 24 at Frosty Faustings 2024-2025", _events(FROSTY_2024, FROSTY_2025), 24),
-    Qualifier(Tier.ASCENDED, "Top 6 at Combo Breaker 2024-2025", _events(COMBO_BREAKER_2024, COMBO_BREAKER_2025), 6),
-    Qualifier(Tier.ASCENDED, "Top 32 at Climax of Night 6 (2024)", _events(CLIMAX_OF_NIGHT_2024), 32),
-    Qualifier(Tier.ASCENDED, "Top 48 at Climax of Night Final/7 (2025)", _events(CLIMAX_OF_NIGHT_2025), 48),
-    Qualifier(Tier.ASCENDED, "Top 32 at Combo Breaker 2026", _events(COMBO_BREAKER_2026), 32),
-    Qualifier(Tier.ASCENDED, "Top 32 at Eclipse 2026", _events(ECLIPSE_2026), 32),
-    Qualifier(Tier.ASCENDED, "1st at a Melt Your Blood", _series(MELT_YOUR_BLOOD), 1),
-    Qualifier(Tier.ASCENDED, "Top 3 at a Melt Your Blood, twice", _series(MELT_YOUR_BLOOD), 3, times_required=2),
+    Qualifier(Tier.ASCENDED, "Top 16 at a TNS MBAACC Netplay bracket", _TNS, 16),
+    Qualifier(Tier.ASCENDED, "Top 24 at Frosty Faustings 2024-2025", _events("Frosty Faustings", FROSTY_2024, FROSTY_2025), 24),
+    Qualifier(Tier.ASCENDED, "Top 6 at Combo Breaker 2024-2025", _events("Combo Breaker", COMBO_BREAKER_2024, COMBO_BREAKER_2025), 6),
+    Qualifier(Tier.ASCENDED, "Top 32 at Climax of Night 6 (2024)", _events("Climax of Night", CLIMAX_OF_NIGHT_2024), 32),
+    Qualifier(Tier.ASCENDED, "Top 48 at Climax of Night Final/7 (2025)", _events("Climax of Night", CLIMAX_OF_NIGHT_2025), 48),
+    Qualifier(Tier.ASCENDED, "Top 32 at Combo Breaker 2026", _events("Combo Breaker", COMBO_BREAKER_2026), 32),
+    Qualifier(Tier.ASCENDED, "Top 32 at Eclipse 2026", _events("Eclipse", ECLIPSE_2026), 32),
+    Qualifier(Tier.ASCENDED, "1st at a Melt Your Blood", _MELT_YOUR_BLOOD, 1),
+    Qualifier(Tier.ASCENDED, "Top 3 at a Melt Your Blood, twice", _MELT_YOUR_BLOOD, 3, times_required=2),
 ]
 
 FIGHTER_LABEL = f"2-2 or better in a bracket of {FIGHTER_MIN_ENTRANTS}+"

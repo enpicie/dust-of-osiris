@@ -1,0 +1,447 @@
+"""Build the matchmaking rules page (docs/index.html, served by GitHub Pages)
+from the bot's own rules in jobs/deferred_worker/matchmaking_rules.py, so the
+page can never drift from what the bot applies.
+
+    python scripts/build_rules_page.py
+
+tests/test_rules_page.py fails if docs/index.html is out of date.
+"""
+import html
+import sys
+from pathlib import Path
+
+ROOT_DIR = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT_DIR / "jobs" / "deferred_worker"))
+
+import matchmaking_rules as rules  # noqa: E402 — imported after sys.path bootstrap
+from matchmaking_rules import Qualifier, Tier  # noqa: E402
+
+OUTPUT = ROOT_DIR / "docs" / "index.html"
+RULES_SOURCE_URL = "https://github.com/enpicie/dust-of-osiris/blob/main/jobs/deferred_worker/matchmaking_rules.py"
+MELT_YOUR_BLOOD_URL = "https://start.gg/meltyourblood"
+
+
+def _e(text: str) -> str:
+    return html.escape(text, quote=True)
+
+
+def _placement(qualifier: Qualifier) -> str:
+    return "1st" if qualifier.max_placement == 1 else f"Top {qualifier.max_placement}"
+
+
+def _conditions(qualifier: Qualifier) -> list[str]:
+    conditions = []
+    if qualifier.events.series:
+        conditions.append("any edition")
+    if qualifier.min_entrants:
+        conditions.append(f"{qualifier.min_entrants}+ entrants")
+    if qualifier.earliest_start is not None:
+        conditions.append(f"{qualifier.earliest_start.year} onward")
+    if qualifier.times_required == 2:
+        conditions.append("twice")
+    elif qualifier.times_required > 2:
+        conditions.append(f"{qualifier.times_required} times")
+    return conditions
+
+
+def _event_cell(qualifier: Qualifier) -> str:
+    links = "".join(
+        f'<a href="{_e(url)}">{_e(label)}</a>' for label, url in qualifier.events.links
+    )
+    links_html = f'<span class="editions">{links}</span>' if links else ""
+    return f'<span class="event-name">{_e(qualifier.events.name)}</span>{links_html}'
+
+
+def _qualifier_table(tier: Tier) -> str:
+    rows = []
+    for q in (q for q in rules.QUALIFIERS if q.tier == tier):
+        conditions = "".join(f"<li>{_e(c)}</li>" for c in _conditions(q))
+        conditions_html = f'<ul class="conditions">{conditions}</ul>' if conditions else ""
+        rows.append(
+            "<tr>"
+            f'<td class="placement">{_e(_placement(q))}</td>'
+            f'<td class="event">{_event_cell(q)}</td>'
+            f"<td>{conditions_html}</td>"
+            "</tr>"
+        )
+    return (
+        '<table class="qualifiers">'
+        '<colgroup><col class="col-placement"><col class="col-event"><col class="col-conditions"></colgroup>'
+        '<thead><tr><th scope="col">Placement</th><th scope="col">Event</th><th scope="col">Conditions</th></tr></thead>'
+        f"<tbody>{''.join(rows)}</tbody>"
+        "</table>"
+    )
+
+
+def _event_title(event_id: int) -> str:
+    """e.g. "Frosty Faustings 2026", from the qualifier that links the event."""
+    label, path = rules.EVENT_PAGES[event_id]
+    url = rules.STARTGG_URL + path
+    name = next(q.events.name for q in rules.QUALIFIERS if url in (u for _, u in q.events.links))
+    return f"{name} {label}"
+
+
+def _count(tier: Tier) -> int:
+    return sum(1 for q in rules.QUALIFIERS if q.tier == tier)
+
+
+def _tier_section(tier: Tier, phase: str, gist: str, body: str) -> str:
+    return f"""
+    <details class="tier" id="{tier.name.lower()}">
+      <summary>
+        <span class="moon moon-{phase}" aria-hidden="true"></span>
+        <span class="tier-name">{_e(tier.label)}</span>
+        <span class="gist">{gist}</span>
+        <span class="chevron" aria-hidden="true"></span>
+      </summary>
+      <div class="tier-body">
+        {body}
+      </div>
+    </details>"""
+
+
+def render() -> str:
+    fighter_bar = (
+        f"{rules.FIGHTER_MIN_WINS}+ set wins (2-2 or better, byes excluded) "
+        f"in a bracket of {rules.FIGHTER_MIN_ENTRANTS}+ entrants"
+    )
+    override_events = " and ".join(_event_title(event_id) for event_id in rules.PLACEMENT_OVERRIDE_PHASE_GROUPS)
+
+    tiers = "".join([
+        _tier_section(
+            Tier.NOVICE, "new",
+            "Starting role. No result at the Fighter bar yet.",
+            f"<p>Every player whose MBAACC results on start.gg do not yet include "
+            f"{_e(fighter_bar)}. Players with no MBAACC results land here too.</p>",
+        ),
+        _tier_section(
+            Tier.FIGHTER, "crescent",
+            f"2-2 or better in a bracket of {rules.FIGHTER_MIN_ENTRANTS}+. Open to anyone.",
+            f"<p>At least one MBAACC result with {_e(fighter_bar)}.</p>"
+            "<p>Fighter is also the general looking-for-games role: anyone can take it, "
+            "alongside any other matchmaking role.</p>",
+        ),
+        _tier_section(
+            Tier.ASCENDED, "half",
+            f"Any one of {_count(Tier.ASCENDED)} results. The Melt Your Blood bar.",
+            f'<p>The same bar as ascending from the <a href="{MELT_YOUR_BLOOD_URL}">Melt Your Blood</a> '
+            "series. Any one of these results earns Ascended.</p>" + _qualifier_table(Tier.ASCENDED),
+        ),
+        _tier_section(
+            Tier.ELITE, "full",
+            f"Any one of {_count(Tier.ELITE)} results. Comes with Ascended.",
+            "<p>Any one of these results earns Elite. Elite players also hold Ascended.</p>"
+            + _qualifier_table(Tier.ELITE),
+        ),
+    ])
+
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Matchmaking roles · dust-of-osiris</title>
+  <meta name="description" content="Requirements for the Novice, Fighter, Ascended and Elite matchmaking roles in the MBAACC Discord.">
+  <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#14151c">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='13' fill='%23e9e2d0'/%3E%3Ccircle cx='21' cy='12' r='11' fill='%2314151c'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@600&display=swap" rel="stylesheet">
+  <style>{STYLES}</style>
+</head>
+<body>
+  <main>
+    <header class="masthead">
+      <h1>Matchmaking roles</h1>
+      <p class="lede">What each role in the MBAACC Discord takes, exactly as the
+        <span class="nowrap">dust-of-osiris</span> bot applies it to your start.gg results.</p>
+      <button type="button" class="toggle-all" aria-pressed="false">Expand all</button>
+    </header>
+
+    <section class="tiers" aria-label="Roles, from Novice to Elite">{tiers}
+    </section>
+
+    <section class="notes" aria-labelledby="notes-heading">
+      <h2 id="notes-heading">How results are read</h2>
+      <ul>
+        <li>Only MBAACC events on start.gg count.</li>
+        <li><strong>Top N</strong> means placing Nth or better. start.gg lists tied places
+          as the best place in the tie, so 9th–12th shows as 9th and counts for Top 12.</li>
+        <li>Series (Midweek Melting, TNS, Melt Your Blood) count any edition's main bracket;
+          redemption brackets do not count.</li>
+        <li>{_e(override_events)} placements are read from its Top 8 bracket, because its
+          event standings on start.gg are wrong.</li>
+        <li>Roles only move up. A newer, weaker result never removes a role you earned.</li>
+      </ul>
+      <p class="source">Generated from the bot's
+        <a href="{RULES_SOURCE_URL}">rules file</a>, so this page always matches what the bot applies.</p>
+    </section>
+  </main>
+  <script>{SCRIPT}</script>
+</body>
+</html>
+"""
+
+
+STYLES = """
+:root {
+  --bg: oklch(0.155 0.014 270);
+  --surface: oklch(0.19 0.016 270);
+  --surface-open: oklch(0.215 0.018 270);
+  --line: oklch(0.30 0.020 270);
+  --ink: oklch(0.93 0.010 270);
+  --muted: oklch(0.75 0.018 270);
+  --faint: oklch(0.62 0.020 270);
+  --crimson: oklch(0.66 0.185 25);
+  --moon: oklch(0.92 0.035 88);
+  --radius: 12px;
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --serif: "Cormorant Garamond", "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 1rem;
+  line-height: 1.55;
+}
+
+main {
+  max-width: 50rem;
+  margin: 0 auto;
+  padding: 4rem 1.25rem 5rem;
+}
+
+a {
+  color: var(--crimson);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.18em;
+}
+a:hover { text-decoration-thickness: 2px; }
+
+:focus-visible {
+  outline: 2px solid var(--crimson);
+  outline-offset: 3px;
+  border-radius: 4px;
+}
+
+/* ── Masthead ─────────────────────────────────────────────────── */
+.masthead {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: end;
+  gap: 0.5rem 1.5rem;
+  margin-bottom: 2.5rem;
+}
+h1 {
+  grid-column: 1 / -1;
+  margin: 0;
+  font-family: var(--serif);
+  font-weight: 600;
+  font-size: 3rem;
+  line-height: 1.05;
+  letter-spacing: -0.01em;
+  text-wrap: balance;
+}
+.lede {
+  margin: 0;
+  max-width: 60ch;
+  color: var(--muted);
+  text-wrap: pretty;
+}
+.toggle-all {
+  justify-self: end;
+  padding: 0.45rem 0.9rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font: 500 0.875rem/1.2 var(--sans);
+  cursor: pointer;
+  transition: color 180ms var(--ease-out), border-color 180ms var(--ease-out), background-color 180ms var(--ease-out);
+}
+.toggle-all:hover { color: var(--ink); border-color: var(--faint); }
+.toggle-all:active { background: var(--surface); }
+
+/* ── Tiers ────────────────────────────────────────────────────── */
+.tiers { display: flex; flex-direction: column; gap: 0.75rem; }
+
+.tier {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  transition: background-color 200ms var(--ease-out), border-color 200ms var(--ease-out);
+}
+.tier[open] { background: var(--surface-open); border-color: oklch(0.36 0.022 270); }
+
+.tier summary {
+  display: grid;
+  grid-template-columns: 1.25rem auto 1fr 1rem;
+  align-items: center;
+  gap: 0.25rem 1rem;
+  padding: 1rem 1.25rem;
+  cursor: pointer;
+  list-style: none;
+  border-radius: var(--radius);
+}
+.tier summary::-webkit-details-marker { display: none; }
+.tier summary:hover .chevron { border-color: var(--ink); }
+
+.tier-name {
+  font-family: var(--serif);
+  font-weight: 600;
+  font-size: 1.75rem;
+  line-height: 1.1;
+}
+.gist { color: var(--muted); font-size: 0.95rem; text-wrap: pretty; }
+
+.chevron {
+  justify-self: end;
+  width: 0.55rem;
+  height: 0.55rem;
+  border-right: 1.5px solid var(--faint);
+  border-bottom: 1.5px solid var(--faint);
+  transform: translateY(-2px) rotate(45deg);
+  transition: transform 220ms var(--ease-out), border-color 180ms var(--ease-out);
+}
+.tier[open] .chevron { transform: translateY(2px) rotate(225deg); }
+
+/* Moon phases: new (Novice) to full (Elite). */
+.moon {
+  width: 1.1rem;
+  height: 1.1rem;
+  border-radius: 50%;
+  background: var(--moon);
+}
+.moon-new { background: transparent; box-shadow: inset 0 0 0 1.5px var(--faint); }
+.moon-crescent { box-shadow: inset 0.38rem 0 0 0 var(--surface); }
+.tier[open] .moon-crescent { box-shadow: inset 0.38rem 0 0 0 var(--surface-open); }
+.moon-half { background: linear-gradient(90deg, transparent 50%, var(--moon) 50%); box-shadow: inset 0 0 0 1.5px var(--moon); }
+.moon-full { box-shadow: 0 0 0.6rem oklch(0.92 0.035 88 / 0.35); }
+
+.tier-body {
+  padding: 0 1.25rem 1.25rem;
+  color: var(--ink);
+}
+.tier-body > p { margin: 0 0 0.75rem; max-width: 68ch; text-wrap: pretty; }
+.tier-body > p:last-child { margin-bottom: 0; }
+
+/* Open/close: fade and lift the content; height animates where supported. */
+.tier::details-content {
+  opacity: 0;
+  block-size: 0;
+  overflow: clip;
+  transition: opacity 220ms var(--ease-out), block-size 260ms var(--ease-out), content-visibility 260ms allow-discrete;
+}
+.tier[open]::details-content { opacity: 1; block-size: auto; }
+@supports (interpolate-size: allow-keywords) {
+  :root { interpolate-size: allow-keywords; }
+}
+
+/* ── Qualifier tables ─────────────────────────────────────────── */
+.qualifiers {
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: collapse;
+  font-size: 0.95rem;
+  font-variant-numeric: tabular-nums;
+}
+.qualifiers th {
+  text-align: left;
+  font-weight: 500;
+  font-size: 0.8rem;
+  color: var(--faint);
+  padding: 0.5rem 0.75rem 0.5rem 0;
+  border-bottom: 1px solid var(--line);
+}
+.qualifiers td {
+  padding: 0.7rem 0.75rem 0.7rem 0;
+  border-bottom: 1px solid oklch(0.27 0.018 270);
+  vertical-align: top;
+}
+.qualifiers tr:last-child td { border-bottom: 0; }
+.placement { white-space: nowrap; font-weight: 600; color: var(--moon); }
+.event-name { display: block; }
+.editions { display: flex; flex-wrap: wrap; gap: 0.15rem 0.75rem; margin-top: 0.15rem; font-size: 0.85rem; }
+.conditions { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 0.25rem 0.75rem; color: var(--muted); }
+.col-placement { width: 5.5rem; }
+.col-conditions { width: 36%; }
+.nowrap { white-space: nowrap; }
+
+/* ── Notes ────────────────────────────────────────────────────── */
+.notes { margin-top: 3.5rem; }
+.notes h2 {
+  margin: 0 0 1rem;
+  font-family: var(--serif);
+  font-weight: 600;
+  font-size: 1.6rem;
+}
+.notes ul { margin: 0; padding-left: 1.1rem; color: var(--muted); max-width: 68ch; }
+.notes li { margin-bottom: 0.5rem; text-wrap: pretty; }
+.notes li::marker { color: var(--crimson); }
+.notes strong { color: var(--ink); font-weight: 600; }
+.source { margin: 2rem 0 0; color: var(--faint); font-size: 0.9rem; }
+
+/* ── Small screens ────────────────────────────────────────────── */
+@media (max-width: 40rem) {
+  main { padding-top: 2.5rem; }
+  h1 { font-size: 2.4rem; }
+  .masthead { grid-template-columns: 1fr; }
+  .toggle-all { justify-self: start; }
+  .tier summary { grid-template-columns: 1.25rem 1fr 1rem; }
+  .gist { grid-column: 2 / 3; grid-row: 2; }
+  .chevron { grid-column: 3; grid-row: 1; }
+  .qualifiers thead { display: none; }
+  .qualifiers tr { display: grid; grid-template-columns: 4.5rem 1fr; padding: 0.6rem 0; border-bottom: 1px solid oklch(0.27 0.018 270); }
+  .qualifiers tr:last-child { border-bottom: 0; }
+  .qualifiers td { border: 0; padding: 0; }
+  .qualifiers td:last-child { grid-column: 2; margin-top: 0.3rem; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after, .tier::details-content {
+    transition-duration: 0ms !important;
+  }
+}
+"""
+
+SCRIPT = """
+(() => {
+  const button = document.querySelector('.toggle-all');
+  const tiers = [...document.querySelectorAll('details.tier')];
+  const sync = () => {
+    const allOpen = tiers.every((d) => d.open);
+    button.textContent = allOpen ? 'Collapse all' : 'Expand all';
+    button.setAttribute('aria-pressed', String(allOpen));
+  };
+  button.addEventListener('click', () => {
+    const open = !tiers.every((d) => d.open);
+    tiers.forEach((d) => { d.open = open; });
+    sync();
+  });
+  tiers.forEach((d) => d.addEventListener('toggle', sync));
+  const target = location.hash && document.getElementById(location.hash.slice(1));
+  if (target && target.tagName === 'DETAILS') target.open = true;
+  sync();
+})();
+"""
+
+
+def main() -> None:
+    OUTPUT.parent.mkdir(parents=True, exist_ok=True)
+    OUTPUT.write_text(render(), encoding="utf-8", newline="\n")
+    (OUTPUT.parent / ".nojekyll").write_text("", encoding="utf-8")
+    print(f"Wrote {OUTPUT.relative_to(ROOT_DIR)}")
+
+
+if __name__ == "__main__":
+    main()

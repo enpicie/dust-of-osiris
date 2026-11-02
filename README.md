@@ -171,6 +171,19 @@ down, no roles change.
 To change the rules, edit `QUALIFIERS` and the fighter thresholds; the tests in
 `tests/deferred_worker/test_matchmaking_rules.py` pin each one.
 
+## Rules page
+
+The requirements for every role are published at
+<https://enpicie.github.io/dust-of-osiris/> (GitHub Pages, served from `docs/`).
+The page is generated from `matchmaking_rules.py`, so it always matches what the
+bot applies. After changing a rule, regenerate it and commit `docs/index.html`:
+
+```bash
+python scripts/build_rules_page.py
+```
+
+`tests/test_rules_page.py` fails CI if the page is out of date.
+
 ## Deferred commands
 
 Discord drops any reply that takes longer than **3 seconds**. Commands that might
